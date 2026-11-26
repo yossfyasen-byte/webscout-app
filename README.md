@@ -1,6 +1,6 @@
 # WebScout (App + Termux)
 
-A simple Android app that gives a graphical interface to the [ZeroSpecter](https://github.com/AlmunharifHamoudi/zerospecter) scanner.
+A simple Android app that gives a graphical interface to the scanner engine (webscout_engine).
 The scanner itself runs inside Termux. This is a modified version of the original tool.
 
 > Use this tool only on websites you own or on sites you have written permission to test.

@@ -3,11 +3,11 @@ plugins {
 }
 
 android {
-    namespace 'com.zerospecter.app'
+    namespace 'com.webscout.app'
     compileSdk 34
 
     defaultConfig {
-        applicationId 'com.zerospecter.app'
+        applicationId 'com.webscout.app'
         minSdk 24
         targetSdk 34
         versionCode 2

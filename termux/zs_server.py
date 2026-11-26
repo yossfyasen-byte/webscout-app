@@ -27,7 +27,7 @@ HOME = Path.home()
 PORT = int(os.environ.get("PORT", "8765"))
 HOSTS = {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}
 ZS_HOME = Path(os.environ.get("ZS_HOME", str(HOME / "webscout-engine"))).expanduser()
-REPORTS = Path(os.environ.get("ZS_REPORTS", str(HOME / ".zerospecter" / "reports"))).expanduser()  # قديم
+REPORTS = Path(os.environ.get("ZS_REPORTS", str(HOME / ".webscout" / "reports"))).expanduser()  # قديم
 RUN_TMP = Path(os.environ.get("ZS_TMP", str(HOME / ".zs_run"))).expanduser()
 
 ID_RE = re.compile(r"^[A-Za-z0-9]{6,32}$")
