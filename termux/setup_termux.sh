@@ -4,25 +4,25 @@
 set -e
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-REPO_URL="${ZS_REPO:-https://github.com/AlmunharifHamoudi/zerospecter.git}"
+REPO_URL="${ZS_REPO:-https://github.com/yossfyasen-byte/webscout-engine.git}"
 
 echo "[1/5] تثبيت الحزم..."
 pkg update -y && pkg upgrade -y
 pkg install -y python git rust clang make binutils pkg-config libffi openssl libsqlite
 
 echo "[2/5] تحميل الأداة..."
-if [ ! -d "$HOME/zerospecter" ]; then
-  git clone "$REPO_URL" "$HOME/zerospecter"
+if [ ! -d "$HOME/webscout-engine" ]; then
+  git clone "$REPO_URL" "$HOME/webscout-engine"
 else
   echo "الأداة موجودة مسبقاً، تخطّيت التحميل."
 fi
 
 echo "[3/5] مكتبات بايثون (ممكن تاخد وقت)..."
-pip install -r "$HOME/zerospecter/requirements.txt"
+pip install -r "$HOME/webscout-engine/requirements.txt"
 
 echo "[4/5] نسخ السيرفر..."
-mkdir -p "$HOME/zerospecter-ui"
-cp "$HERE/zs_server.py" "$HOME/zerospecter-ui/"
+mkdir -p "$HOME/webscout-ui"
+cp "$HERE/zs_server.py" "$HOME/webscout-ui/"
 
 echo "[5/5] السماح للتطبيق بتشغيل السيرفر..."
 mkdir -p "$HOME/.termux"
@@ -34,4 +34,4 @@ termux-reload-settings 2>/dev/null || true
 
 echo
 echo "خلص. افتح تطبيق WebScout."
-echo "أو شغّل يدوياً:  cd ~/zerospecter-ui && python zs_server.py"
+echo "أو شغّل يدوياً:  cd ~/webscout-ui && python zs_server.py"

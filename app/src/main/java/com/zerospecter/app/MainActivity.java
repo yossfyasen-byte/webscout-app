@@ -81,7 +81,7 @@ public class MainActivity extends Activity {
             i.setAction("com.termux.RUN_COMMAND");
             i.putExtra("com.termux.RUN_COMMAND_PATH", "/data/data/com.termux/files/usr/bin/bash");
             i.putExtra("com.termux.RUN_COMMAND_ARGUMENTS",
-                    new String[]{"-lc", "cd ~/zerospecter-ui && exec python zs_server.py"});
+                    new String[]{"-lc", "cd ~/webscout-ui && exec python zs_server.py"});
             i.putExtra("com.termux.RUN_COMMAND_WORKDIR", "/data/data/com.termux/files/home");
             i.putExtra("com.termux.RUN_COMMAND_BACKGROUND", true);
             if (Build.VERSION.SDK_INT >= 26) {

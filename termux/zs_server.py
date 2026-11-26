@@ -26,7 +26,7 @@ VERSION = "1.2"
 HOME = Path.home()
 PORT = int(os.environ.get("PORT", "8765"))
 HOSTS = {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}
-ZS_HOME = Path(os.environ.get("ZS_HOME", str(HOME / "zerospecter"))).expanduser()
+ZS_HOME = Path(os.environ.get("ZS_HOME", str(HOME / "webscout-engine"))).expanduser()
 REPORTS = Path(os.environ.get("ZS_REPORTS", str(HOME / ".zerospecter" / "reports"))).expanduser()  # قديم
 RUN_TMP = Path(os.environ.get("ZS_TMP", str(HOME / ".zs_run"))).expanduser()
 
@@ -188,7 +188,7 @@ def pump(proc):
             Run.code, Run.logname, Run.ended = code, name, time.time()
 
 
-def start_run(target, modules):
+def start_run(target, modules, deep=False):
     if not ZS_HOME.is_dir():
         return False, f"مجلد الأداة غير موجود: {ZS_HOME}"
     with Run.lock:
@@ -196,9 +196,15 @@ def start_run(target, modules):
             return False, "في فحص شغّال حالياً"
         shutil.rmtree(RUN_TMP, ignore_errors=True)
         RUN_TMP.mkdir(parents=True, exist_ok=True)
-        cmd = [sys.executable, "-c", "from zerospecter.cli import main; main()", target,
+        cmd = [sys.executable, "-c", "from webscout_engine.cli import main; main()", target,
                "--yes", "--i-have-authorization", "--no-ui", "--no-open",
                "--formats", "json,html,csv,sarif", "--live", "-o", str(RUN_TMP)]
+        # كل الفحوصات: ملف تشكيلة عادي (مش ستيلث) ومهلة أطول للمواقع البطيئة
+        cmd += ["--arsenal-profile", "normal", "--timeout", "15"]
+        if deep:
+            # ثوابت من السيرفر، ما بتجي من المتصفح: الحد الأقصى آمن
+            cmd += ["--depth", "4", "--threads", "20", "--rate", "25", "--active-forms"]
+            modules = ["all"]
         if modules and modules != ["all"]:
             cmd += ["-m", ",".join(modules)]
         env = dict(os.environ, PYTHONPATH=str(ZS_HOME), PYTHONUNBUFFERED="1", NO_COLOR="1")
@@ -488,7 +494,7 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(mods, list) or not all(m == "all" or m in MODULES for m in mods):
                 return self.json({"error": "invalid modules"}, 400)
             mods = ["all"] if "all" in mods else mods
-            ok, msg = start_run(target, mods)
+            ok, msg = start_run(target, mods, deep=data.get("deep") is True)
             return self.json({"ok": True} if ok else {"error": msg}, 200 if ok else 409)
 
         if path == "/api/scans/delete":
@@ -633,7 +639,7 @@ ar:{select:'تحديد',cancel:'إلغاء',all:'الكل',delete:'حذف',delet
  target:'رابط الهدف',mods:'الوحدات',m_all:'الكل',m_infra:'البنية التحتية',m_origin:'المصدر',m_files:'الملفات الحساسة',m_dirs:'المجلدات',m_params:'المعاملات',m_tech:'التقنيات',m_vuln:'فحص الويب',
  auth:'أؤكد أنني أملك هذا الموقع أو لدي إذن كتابي بفحصه. الفحص دون إذن ممنوع قانونياً.',start:'ابدأ الفحص',stop:'إيقاف',
  bar_run:'الفحص جارٍ',bar_done:'اكتمل الفحص، اضغط لعرض النتيجة',running:'جارٍ الفحص...',
- s_done:'اكتمل الفحص',s_stop:'تم إيقاف الفحص',s_err:'انتهى بخطأ',s_cfg:'خطأ في الإعدادات',s_auth:'التفويض ناقص',saved:'حُفظ في',toast:'بدأ الفحص',view:'عرض النتيجة',elapsed:'الوقت',attempts:'المحاولات',eta:'الوقت المتبقي',eta_calc:'غير معروف',log:'سجل التنفيذ',tasks:'المهام',probes:'الطلبات',st_completed:'مكتمل',st_cancelled:'أُلغي',st_skipped:'تم التخطي',st_interrupted:'انقطع',st_failed:'فشل',st_error:'خطأ',st_running:'جارٍ',
+ s_done:'اكتمل الفحص',s_stop:'تم إيقاف الفحص',s_err:'انتهى بخطأ',s_cfg:'خطأ في الإعدادات',s_auth:'التفويض ناقص',saved:'حُفظ في',toast:'بدأ الفحص',view:'عرض النتيجة',elapsed:'الوقت',attempts:'المحاولات',eta:'الوقت المتبقي',eta_calc:'غير معروف',log:'سجل التنفيذ',deep:'فحص عميق وشامل (أبطأ، يغطي كل شي، ومحدود بمعدل آمن)',tasks:'المهام',probes:'الطلبات',st_completed:'مكتمل',st_cancelled:'أُلغي',st_skipped:'تم التخطي',st_interrupted:'انقطع',st_failed:'فشل',st_error:'خطأ',st_running:'جارٍ',
  search:'البحث بالهدف...',empty_hist:'لا توجد فحوصات بعد',done:'مكتمل',incomplete:'غير مكتمل',interrupted:'انقطع الفحص قبل اكتماله.',orig:'التقرير الأصلي',
  findings:'النتائج',no_find:'لا توجد نتائج لهذا الفحص.',sev_critical:'حرجة',sev_high:'عالية',sev_medium:'متوسطة',sev_low:'منخفضة',sev_info:'معلومة',
  f_loc:'الموقع',f_ev:'الدليل',f_fix:'طريقة المعالجة',f_tip:'نصيحة عامة',f_more:'تفاصيل إضافية',f_none:'غير متوفر',
@@ -645,7 +651,7 @@ en:{select:'Select',cancel:'Cancel',all:'All',delete:'Delete',deleted:'Deleted',
  target:'Target URL',mods:'Modules',m_all:'All',m_infra:'Infra',m_origin:'Origin',m_files:'Sensitive files',m_dirs:'Directories',m_params:'Parameters',m_tech:'Technology',m_vuln:'Web checks',
  auth:'I confirm I own this site or have written permission to test it. Testing without permission is illegal.',start:'Start scan',stop:'Stop',
  bar_run:'Scan started and running',bar_done:'Scan finished, tap to view the result',running:'Scanning...',
- s_done:'Scan completed',s_stop:'Scan stopped',s_err:'Finished with an error',s_cfg:'Configuration error',s_auth:'Missing authorization',saved:'Saved in',toast:'Scan started',view:'View result',elapsed:'Elapsed',attempts:'Attempts',eta:'Time left',eta_calc:'Unknown',log:'Scan log',tasks:'Tasks',probes:'Requests',st_completed:'Completed',st_cancelled:'Cancelled',st_skipped:'Skipped',st_interrupted:'Interrupted',st_failed:'Failed',st_error:'Error',st_running:'Running',
+ s_done:'Scan completed',s_stop:'Scan stopped',s_err:'Finished with an error',s_cfg:'Configuration error',s_auth:'Missing authorization',saved:'Saved in',toast:'Scan started',view:'View result',elapsed:'Elapsed',attempts:'Attempts',eta:'Time left',eta_calc:'Unknown',log:'Scan log',deep:'Deep full scan (slower, covers everything, capped at a safe rate)',tasks:'Tasks',probes:'Requests',st_completed:'Completed',st_cancelled:'Cancelled',st_skipped:'Skipped',st_interrupted:'Interrupted',st_failed:'Failed',st_error:'Error',st_running:'Running',
  search:'Search by target...',empty_hist:'No scans yet',done:'Completed',incomplete:'Incomplete',interrupted:'The scan was interrupted before it finished.',orig:'Original report',
  findings:'Findings',no_find:'No findings in this scan.',sev_critical:'Critical',sev_high:'High',sev_medium:'Medium',sev_low:'Low',sev_info:'Info',
  f_loc:'Location',f_ev:'Evidence',f_fix:'How to fix',f_tip:'General tip',f_more:'More details',f_none:'Not available',
@@ -827,6 +833,7 @@ async function scanView(){
   <label class="lbl" for="tg">${t('target')}</label>
   <input id="tg" class="inp ltr" placeholder="https://example.com" inputmode="url" autocapitalize="off" autocomplete="off" spellcheck="false">
   <label class="lbl">${t('mods')}</label><div class="row" id="mods"></div>
+  <label class="chk"><input type="checkbox" id="deep"><span>${t('deep')}</span></label>
   <label class="chk"><input type="checkbox" id="auth"><span>${t('auth')}</span></label>
   <button class="btn" id="go" disabled style="width:100%">${t('start')}</button>
   <p id="err" style="color:var(--critical);margin:10px 0 0"></p></div>
@@ -841,7 +848,7 @@ async function scanView(){
  $('#go').onclick=async()=>{
   $('#err').textContent='';$('#go').disabled=true;
   try{
-   await post('/api/run',{target:$('#tg').value.trim(),modules:[...sel],authorized:$('#auth').checked});
+   await post('/api/run',{target:$('#tg').value.trim(),modules:[...sel],authorized:$('#auth').checked,deep:$('#deep').checked});
    try{navigator.vibrate&&navigator.vibrate(80)}catch(e){}
    try{window.Android&&Android.toast&&Android.toast(t('toast'))}catch(e){}
    await gpoll();window.scrollTo(0,0);

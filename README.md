@@ -36,7 +36,7 @@ ZS_REPO=https://github.com/<your-name>/<your-scanner>.git bash <your-repo>/termu
 ## 3) Usage
 - Open the **WebScout** app. If the server is not running, tap **Start server** (it asks for permission once).
 - **Scan** tab: enter the URL, choose the modules, confirm authorization, and start.
-- Or start the server by hand: `cd ~/zerospecter-ui && python zs_server.py`, then open `127.0.0.1:8765` in any browser.
+- Or start the server by hand: `cd ~/webscout-ui && python zs_server.py`, then open `127.0.0.1:8765` in any browser.
 
 ## Notes
 - The server listens on `127.0.0.1` only and rejects requests from external sites.
