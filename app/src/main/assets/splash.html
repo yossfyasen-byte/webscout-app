@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ZeroSpecter</title>
+<style>
+:root{color-scheme:dark}
+html,body{margin:0;height:100%;background:#0b0d12;color:#e8ecf3;font-family:system-ui,sans-serif;overflow:hidden}
+.wrap{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center}
+#intro{display:flex;flex-direction:column;align-items:center;transition:opacity .5s}
+#intro.gone{opacity:0;pointer-events:none}
+.logo{font-size:44px;font-weight:800;letter-spacing:.5px;color:#ff4d6d;opacity:0;transform:scale(.8);animation:logo .9s .1s cubic-bezier(.2,.8,.2,1) forwards}
+.sub{margin-top:10px;color:#8b93a7;font-size:15px;opacity:0;animation:fade .6s .8s forwards}
+.feats{margin-top:26px;display:grid;gap:10px;width:min(320px,80%)}
+.feat{background:#151922;border:1px solid #252c3b;border-radius:14px;padding:12px 14px;font-size:14px;opacity:0;transform:translateY(10px);animation:up .5s forwards}
+.feat:nth-child(1){animation-delay:1.3s}
+.feat:nth-child(2){animation-delay:1.7s}
+.feat:nth-child(3){animation-delay:2.1s}
+#load{position:absolute;bottom:0;left:0;right:0;padding:24px 28px 44px;opacity:0;transition:opacity .4s}
+#load.on{opacity:1}
+.bar{height:6px;border-radius:99px;background:#1c2230;overflow:hidden}
+#fill{height:100%;width:0;background:linear-gradient(90deg,#ff4d6d,#ff8fa3)}
+.row{display:flex;justify-content:space-between;margin-top:10px;font-size:13px;color:#8b93a7}
+@keyframes logo{to{opacity:1;transform:none}}
+@keyframes fade{to{opacity:1}}
+@keyframes up{to{opacity:1;transform:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div id="intro">
+    <div class="logo">ZeroSpecter</div>
+    <div class="sub">أداة فحص أمني للمواقع</div>
+    <div class="feats">
+      <div class="feat">فحص المنافذ والخدمات المكشوفة</div>
+      <div class="feat">نتائج مع طريقة المعالجة</div>
+      <div class="feat">سجلات محفوظة في الهاتف</div>
+    </div>
+  </div>
+  <div id="load">
+    <div class="bar"><div id="fill"></div></div>
+    <div class="row"><span id="msg">تهيئة التطبيق</span><span id="pct">0%</span></div>
+  </div>
+</div>
+<script>
+const SERVER = 'http://127.0.0.1:8765/';
+const OFFLINE = 'file:///android_asset/offline.html';
+const fill = document.getElementById('fill');
+const msg = document.getElementById('msg');
+const pct = document.getElementById('pct');
+
+function termuxOk() {
+  try { return window.Android && Android.termuxInstalled ? !!Android.termuxInstalled() : true; }
+  catch (e) { return true; }
+}
+function label(p) {
+  if (p < 25) return 'تهيئة التطبيق';
+  if (p < 50) return 'تحميل الواجهة';
+  if (p < 75) return 'التحقق من تيرمكس';
+  if (p < 100) return 'التحقق من السيرفر';
+  return 'جاهز';
+}
+function serverUp() {
+  const ping = fetch(SERVER + 'manifest.json', { mode: 'no-cors', cache: 'no-store' }).then(() => true, () => false);
+  const timeout = new Promise(res => setTimeout(() => res(false), 1500));
+  return Promise.race([ping, timeout]);
+}
+function setProgress(p) {
+  fill.style.width = p + '%';
+  pct.textContent = p + '%';
+  msg.textContent = label(p);
+}
+
+setTimeout(() => {
+  document.getElementById('intro').classList.add('gone');
+  document.getElementById('load').classList.add('on');
+  let p = 0;
+  const timer = setInterval(() => {
+    p = Math.min(100, p + 2);
+    setProgress(p);
+    if (p >= 100) {
+      clearInterval(timer);
+      setTimeout(finish, 250);
+    }
+  }, 50);
+}, 3000);
+
+async function finish() {
+  if (!termuxOk()) { location.replace(OFFLINE); return; }
+  const up = await serverUp();
+  location.replace(up ? SERVER : OFFLINE);
+}
+</script>
+</body>
+</html>

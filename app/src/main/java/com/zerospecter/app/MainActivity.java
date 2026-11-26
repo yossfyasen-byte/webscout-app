@@ -22,6 +22,7 @@ public class MainActivity extends Activity {
 
     private static final String SERVER = "http://127.0.0.1:8765/";
     private static final String OFFLINE = "file:///android_asset/offline.html";
+    private static final String SPLASH = "file:///android_asset/splash.html";
     private static final String RUN_PERMISSION = "com.termux.permission.RUN_COMMAND";
     private static final int REQ_RUN = 7;
 
@@ -53,7 +54,7 @@ public class MainActivity extends Activity {
             }
         });
 
-        web.loadUrl(SERVER);
+        web.loadUrl(SPLASH);
     }
 
     private boolean termuxInstalled() {
@@ -125,6 +126,22 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void toast(String msg) {
             runOnUiThread(() -> Toast.makeText(MainActivity.this, msg, Toast.LENGTH_SHORT).show());
+        }
+
+        @JavascriptInterface
+        public boolean termuxInstalled() {
+            return MainActivity.this.termuxInstalled();
+        }
+
+        @JavascriptInterface
+        public void copy(String text) {
+            runOnUiThread(() -> {
+                android.content.ClipboardManager cm =
+                        (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                if (cm != null) {
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("zerospecter", text));
+                }
+            });
         }
     }
 }

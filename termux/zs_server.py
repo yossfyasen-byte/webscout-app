@@ -22,7 +22,7 @@ from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "1.1"
+VERSION = "1.2"
 HOME = Path.home()
 PORT = int(os.environ.get("PORT", "8765"))
 HOSTS = {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}
@@ -158,7 +158,7 @@ def finalize(started):
     except OSError:
         LOGS = HOME / "ZeroSpecter"
         LOGS.mkdir(parents=True, exist_ok=True)
-        Run.log.append("! ما قدرت أكتب بذاكرة الجوال (شغّل termux-setup-storage). انحفظ بمجلد تيرمكس: ~/ZeroSpecter")
+        Run.log.append("! ما قدرت أكتب بذاكرة الموبايل (شغّل termux-setup-storage). انحفظ بمجلد تيرمكس: ~/ZeroSpecter")
     n = max([x for x, _ in log_dirs()] or [0]) + 1
     dest = LOGS / f"log {n}"
     dest.mkdir()
@@ -258,6 +258,116 @@ MANIFEST = {
 }
 
 
+def delete_scans(ids):
+    wanted = set(ids)
+    removed = set()
+    dirs = [d for _, d in log_dirs()]
+    if REPORTS.is_dir():
+        dirs.append(REPORTS)
+    for d in dirs:
+        try:
+            files = [p for p in d.iterdir() if p.is_file()]
+        except OSError:
+            continue
+        for p in files:
+            m = re.match(r"^.*_([A-Za-z0-9]+)\.[A-Za-z]+$", p.name)
+            if m and m.group(1) in wanted:
+                try:
+                    p.unlink()
+                    removed.add(m.group(1))
+                except OSError:
+                    pass
+    for _, d in log_dirs():
+        try:
+            if not any(d.iterdir()):
+                d.rmdir()
+        except OSError:
+            pass
+    return len(removed)
+
+
+REPORT_CSS = """<style>
+html,body{background:#000!important;color:#f0f0f5}
+body{padding-bottom:40px}
+section,.card,.panel,.box,.module,.finding,[class*="card"],[class*="panel"]{background:#101017!important;border:1px solid #24243a!important;border-radius:16px!important}
+table{display:block;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;border-collapse:collapse;background:transparent!important}
+thead,tbody{display:table;width:100%;min-width:0}
+tr{display:table-row}
+th,td{vertical-align:top;white-space:nowrap;padding:8px 8px;text-align:start}
+td.wrap,th.wrap{white-space:normal;overflow-wrap:break-word;word-break:normal;width:auto}
+td{width:1%}
+th{font-size:12px;letter-spacing:.5px;color:#9a9ab0}
+td{line-height:1.5}
+code,kbd{background:#0c0c14;border:1px solid #2a2a40;border-radius:8px;padding:2px 6px;white-space:pre-wrap;word-break:break-all;line-height:1.9;box-decoration-break:clone;-webkit-box-decoration-break:clone;font-size:.92em}
+pre{background:#0c0c14;border:1px solid #2a2a40;border-radius:12px;padding:10px 12px;white-space:pre-wrap;word-break:break-all;max-width:100%;overflow:auto}
+.zs-tip{margin-top:12px;padding:12px 14px;border:1px solid #2a2a40;border-radius:12px;background:#0c0c14;color:#c9c9d8;line-height:1.7}
+.zs-tip b{color:#ffb3c1;margin-inline-end:6px}
+img,svg{max-width:100%;height:auto}
+</style>"""
+
+
+REPORT_LABELS_JS = r"""
+const MAP={'critical':'حرجة','high':'عالية','medium':'متوسطة','low':'منخفضة','info':'معلومة','CRITICAL':'حرجة','HIGH':'عالية','MEDIUM':'متوسطة','LOW':'منخفضة','INFO':'معلومة',
+'expand all':'توسيع الكل','collapse all':'طي الكل','Findings':'النتائج','Evidence':'الدليل','Impact':'الأثر','Remediation':'طريقة المعالجة','Finding ID':'معرّف النتيجة',
+'Scan type':'نوع الفحص','References':'المراجع','Evidence, impact and remediation':'الدليل والأثر والمعالجة','confidence':'الثقة','check':'الفحص','verification':'التحقق',
+'module':'الوحدة','observed':'ملاحظ','active':'نشط','passive':'سلبي','status':'الحالة','Status':'الحالة','Type':'النوع','ID':'المعرّف','Module':'الوحدة','Requests':'الطلبات',
+'Duration':'المدة','Started':'بدأ','Generated':'أُنشئ','Scan ID':'معرّف الفحص','Severity distribution':'توزيع الخطورة','Module coverage':'تغطية الوحدات','Modules':'الوحدات',
+'SECURITY ASSESSMENT REPORT':'تقرير تقييم الأمن','Security Assessment Report':'تقرير تقييم الأمن','INTERRUPTED':'انقطع','COMPLETED':'مكتمل','SKIPPED':'تم التخطي','CANCELLED':'أُلغي',
+'cancelled':'أُلغي','completed':'مكتمل','skipped':'تم التخطي','interrupted':'انقطع','FINDINGS':'نتيجة','findings':'نتيجة','Infrastructure Reconnaissance':'استطلاع البنية التحتية',
+'Origin IP Discovery':'اكتشاف عنوان IP الأصلي','Sensitive File Discovery':'اكتشاف الملفات الحساسة','Directory and Content Discovery':'اكتشاف المجلدات والمحتوى',
+'Hidden Parameter Discovery':'اكتشاف المعاملات المخفية','Technology-Specific Probes':'فحوصات خاصة بالتقنيات','Web Security Assessment':'تقييم أمن الويب',
+'A module listed as skipped did not run, and its reason is shown. This scan is not complete coverage of every category unless every module reports completed.':'الوحدة المتخطاة لم تعمل، وسبب تخطيها موضّح. هذا الفحص لا يغطي كل الفئات إلا إذا أكملت كل الوحدات.',
+'Search findings, endpoints, checks':'ابحث في النتائج والمسارات والفحوصات'};
+const KEYS=Object.keys(MAP).sort((a,b)=>b.length-a.length);
+function esc2(x){return x.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}
+function trAr(str){
+ const k=str.trim();
+ if(MAP[k]!==undefined)return str.replace(k,MAP[k]);
+ let out=str;
+ KEYS.forEach(function(key){
+  if(key.length<2)return;
+  var re=new RegExp('(^|[^A-Za-z])'+esc2(key)+'(?![A-Za-z])','g');
+  out=out.replace(re,function(all,pre){return pre+MAP[key]});
+ });
+ return out;
+}
+(function(){
+ var ar=true;try{ar=(localStorage.getItem('zs_lang')||'ar')==='ar'}catch(e){}
+ function titleOf(el){var n=el;while(n&&n!==document.body){var s=n.previousElementSibling;while(s){var h=(s.matches&&s.matches('h1,h2,h3,h4'))?s:(s.querySelector&&s.querySelector('h1,h2,h3,h4'));if(h&&h.textContent.trim())return h.textContent;s=s.previousElementSibling}n=n.parentElement}return ''}
+ function tipFor(s){
+  for(var i=0;i<TIPS.length;i++){if(TIPS[i][0].test(s))return ar?TIPS[i][1]:TIPS[i][2]}
+  return ar?TIP_DEFAULT[0]:TIP_DEFAULT[1];
+ }
+ document.querySelectorAll('body *').forEach(function(e){
+  if(e.children.length!==0)return;
+  var k=e.textContent.trim();
+  if(k!=='Remediation')return;
+  var row=e.parentElement;var t=titleOf(row)||'';
+  var box=document.createElement('div');box.className='zs-tip';
+  box.innerHTML='<b>'+(ar?'نصيحة عامة':'General tip')+':</b>'+tipFor(t);
+  (row.parentElement||row).insertBefore(box,row.nextSibling);
+ });
+ if(ar){
+  document.documentElement.lang='ar';document.documentElement.dir='rtl';
+  var w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,null);
+  var nodes=[];while(w.nextNode())nodes.push(w.currentNode);
+  nodes.forEach(function(nd){
+   if(!nd.parentElement||/SCRIPT|STYLE/.test(nd.parentElement.tagName))return;
+   var v=nd.nodeValue;if(!v.trim())return;
+   nd.nodeValue=trAr(v);
+  });
+  document.querySelectorAll('td').forEach(function(td){if(td.textContent.trim().length>30)td.classList.add('wrap')});
+  document.querySelectorAll('input[placeholder]').forEach(function(i){var p=i.getAttribute('placeholder');if(MAP[p])i.setAttribute('placeholder',MAP[p])});
+ }
+})();
+"""
+
+def report_script():
+    m = re.search(r"const TIPS=\[.*?\];\s*const TIP_DEFAULT=.*?\];", PAGE, re.S)
+    tips = m.group(0) if m else "const TIPS=[];const TIP_DEFAULT=['','']; "
+    return "<script>" + tips + REPORT_LABELS_JS + "</script>"
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -309,7 +419,11 @@ class Handler(BaseHTTPRequestHandler):
         if m:
             p = find(m.group(1), "html")
             if p:
-                return self.send(200, p.read_bytes(), "text/html; charset=utf-8")
+                html = p.read_text(encoding="utf-8", errors="replace")
+                html = html.replace("</head>", REPORT_CSS + "</head>", 1) if "</head>" in html else REPORT_CSS + html
+                tail = report_script()
+                html = html.replace("</body>", tail + "</body>", 1) if "</body>" in html else html + tail
+                return self.send(200, html.encode("utf-8"), "text/html; charset=utf-8")
         self.send(404, "not found", "text/plain")
 
     def do_POST(self):
@@ -318,7 +432,7 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         try:
             n = int(self.headers.get("Content-Length") or 0)
-            data = json.loads(self.rfile.read(n) or b"{}") if 0 <= n <= 4096 else None
+            data = json.loads(self.rfile.read(n) or b"{}") if 0 <= n <= 200000 else None
         except Exception:
             data = None
         if not isinstance(data, dict):
@@ -337,6 +451,11 @@ class Handler(BaseHTTPRequestHandler):
             ok, msg = start_run(target, mods)
             return self.json({"ok": True} if ok else {"error": msg}, 200 if ok else 409)
 
+        if path == "/api/scans/delete":
+            ids = data.get("ids")
+            if not isinstance(ids, list) or not ids or len(ids) > 1000 or not all(isinstance(i, str) and ID_RE.match(i) for i in ids):
+                return self.json({"error": "invalid ids"}, 400)
+            return self.json({"deleted": delete_scans(ids)})
         if path == "/api/run/stop":
             return self.json({"ok": stop_run()})
         self.json({"error": "not found"}, 404)
@@ -351,72 +470,84 @@ PAGE = r"""<!doctype html>
 <link rel="manifest" href="/manifest.json">
 <title>ZeroSpecter</title>
 <style>
-:root{--bg:#0b0d12;--card:#151922;--card2:#1c2230;--txt:#e8ecf3;--mut:#8b93a7;--line:#252c3b;--pre:#0a0c10;
---hdr:rgba(11,13,18,.92);--nav:rgba(21,25,34,.96);
---critical:#ff4d6d;--high:#ff8a4c;--medium:#ffc857;--low:#4cc9f0;--info:#7b8cff;--ok:#3ddc97;--acc:#ff4d6d}
-:root[data-theme=light]{--bg:#f4f6fa;--card:#fff;--card2:#eef1f7;--txt:#161b26;--mut:#5d667a;--line:#dde2ec;--pre:#f0f3f9;
---hdr:rgba(244,246,250,.94);--nav:rgba(255,255,255,.97);
---critical:#d6264a;--high:#d9650f;--medium:#a87a00;--low:#1b8db3;--info:#4a5be0;--ok:#16915f;--acc:#e0294f}
+:root{--bg:#000;--card:#0b0b0e;--card2:#15151a;--txt:#f4f4f7;--mut:#8b8b97;--line:#1d1d23;--pre:#040405;--hdr:rgba(0,0,0,.82);--nav:rgba(8,8,10,.92);--critical:#ff3b5c;--high:#ff8a4c;--medium:#ffc857;--low:#4cc9f0;--info:#8f9bff;--ok:#2ee6a0;--acc:#ff3b5c}
+:root[data-theme=light]{--bg:#f4f5f8;--card:#ffffff;--card2:#eceef4;--txt:#11141c;--mut:#5d6578;--line:#e0e4ec;--pre:#eef1f6;--hdr:rgba(244,245,248,.9);--nav:rgba(255,255,255,.96);--critical:#d6264a;--high:#d9650f;--medium:#a87a00;--low:#1b8db3;--info:#4a5be0;--ok:#16915f;--acc:#e0294f}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;
-padding-bottom:calc(76px + env(safe-area-inset-bottom))}
-header{position:sticky;top:0;z-index:5;background:var(--hdr);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+html{background:var(--bg)}
+body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.55 system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;padding-bottom:calc(84px + env(safe-area-inset-bottom))}
+header{position:sticky;top:0;z-index:5;background:var(--hdr);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
 .hrow{padding:14px 16px;display:flex;align-items:center;gap:10px}
-header h1{font-size:17px;margin:0;flex:1}
+header h1{font-size:17px;margin:0;flex:1;font-weight:700;letter-spacing:.2px}
 .back{background:none;border:0;color:var(--txt);font-size:22px;padding:0 4px;display:none}
-#runbar{display:none;align-items:center;gap:10px;padding:9px 16px;font-size:14px;font-weight:600;color:#fff;background:var(--acc);text-decoration:none}
+#runbar{display:none;align-items:center;gap:10px;padding:10px 16px;font-size:14px;font-weight:600;color:#fff;background:var(--acc);text-decoration:none}
 #runbar.done{background:var(--ok)}
 #runbar .t{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.spin{width:16px;height:16px;border:3px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:sp .8s linear infinite;flex:none}
+.spin{width:16px;height:16px;border:2.5px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:sp .8s linear infinite;flex:none}
 .spin.big{width:20px;height:20px;border-color:var(--line);border-top-color:var(--acc)}
 @keyframes sp{to{transform:rotate(360deg)}}
-main{padding:16px;max-width:720px;margin:0 auto}
-.view{animation:in .28s ease}
-@keyframes in{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
-.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;margin-bottom:12px}
+main{padding:18px 16px;max-width:720px;margin:0 auto}
+.view{animation:in .3s cubic-bezier(.2,.7,.2,1)}
+@keyframes in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px;margin-bottom:12px}
 a.card{display:block;color:inherit;text-decoration:none;transition:transform .15s,background .15s}
-a.card:active{transform:scale(.98);background:var(--card2)}
+a.card:active{transform:scale(.985);background:var(--card2)}
+.sc{cursor:pointer}
+.sc.picked{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc) inset}
+.ck{width:22px;height:22px;border-radius:7px;border:1.5px solid var(--mut);display:inline-flex;align-items:center;justify-content:center;font-size:13px;flex:none;color:#fff}
+.ck.on{background:var(--acc);border-color:var(--acc)}
 .ltr{direction:ltr;unicode-bidi:isolate;text-align:left;word-break:break-all}
 .mut{color:var(--mut);font-size:13px}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .sp{justify-content:space-between}
-.chip{border-radius:999px;padding:2px 10px;font-size:12px;font-weight:600;border:1px solid currentColor;white-space:nowrap}
+.chip{border-radius:999px;padding:3px 10px;font-size:12px;font-weight:600;border:1px solid currentColor;white-space:nowrap;background:transparent}
 .c-critical{color:var(--critical)}.c-high{color:var(--high)}.c-medium{color:var(--medium)}
 .c-low{color:var(--low)}.c-info{color:var(--info)}.c-ok{color:var(--ok)}
-.tiles{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin:12px 0 4px}
-.tile{background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:8px 2px;text-align:center;color:var(--txt);font:inherit}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:12px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px}
+.stat b{display:block;font-size:28px;font-weight:700;letter-spacing:-.5px}
+.bar{display:flex;height:8px;border-radius:99px;overflow:hidden;background:var(--card2);margin:12px 0}
+.bar i{display:block;transition:width .6s}
+.tiles{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin:14px 0 4px}
+.tile{background:var(--card2);border:1px solid var(--line);border-radius:14px;padding:10px 2px;text-align:center;color:var(--txt);font:inherit;cursor:pointer}
 .tile b{display:block;font-size:20px;line-height:1.2}
 .tile span{font-size:11px}
 .tile.on{outline:2px solid currentColor}
-h2{font-size:15px;margin:18px 0 10px;color:var(--mut);font-weight:600}
-.f{border-inline-start:4px solid var(--info)}
+h2{font-size:12px;margin:22px 0 10px;color:var(--mut);font-weight:600;letter-spacing:.6px;text-transform:uppercase}
+.f{border-inline-start:3px solid var(--info)}
 .f.critical{border-color:var(--critical)}.f.high{border-color:var(--high)}
 .f.medium{border-color:var(--medium)}.f.low{border-color:var(--low)}
-.k{font-size:12px;color:var(--mut);margin:12px 0 4px;font-weight:600}
+.k{font-size:12px;color:var(--mut);margin:14px 0 4px;font-weight:600}
 .v{margin:0;word-break:break-word}
-pre{background:var(--pre);border:1px solid var(--line);border-radius:12px;padding:10px;overflow:auto;margin:0;
-font-size:12px;direction:ltr;text-align:left;max-height:260px;white-space:pre-wrap;word-break:break-all}
-button.btn,a.btn{background:var(--acc);color:#fff;border:0;border-radius:12px;padding:12px 16px;font:inherit;
-font-weight:600;text-decoration:none;display:inline-block;text-align:center}
-button.btn:disabled{opacity:.4}
-button.ghost{background:var(--card2);color:var(--txt)}
-.lbl{display:block;margin:12px 0 6px;color:var(--mut);font-size:13px}
-.inp{width:100%;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--txt);font:inherit}
-.mb{background:var(--card2);color:var(--mut);border:1px solid var(--line);border-radius:999px;padding:6px 12px;font:inherit;font-size:13px}
+pre{background:var(--pre);border:1px solid var(--line);border-radius:12px;padding:12px;overflow:auto;margin:0;font-size:12px;direction:ltr;text-align:left;max-height:260px;white-space:pre-wrap;word-break:break-all}
+button.btn,a.btn{background:var(--acc);color:#fff;border:0;border-radius:12px;padding:12px 16px;font:inherit;font-weight:600;text-decoration:none;display:inline-block;text-align:center;cursor:pointer}
+button.btn:disabled{opacity:.35;cursor:default}
+button.ghost{background:var(--card2);color:var(--txt);border:1px solid var(--line)}
+.danger{background:#e5484d;color:#fff}
+.sm{padding:8px 12px;font-size:13px;border-radius:10px}
+.lbl{display:block;margin:14px 0 6px;color:var(--mut);font-size:13px}
+.inp{width:100%;padding:12px 14px;border-radius:12px;border:1px solid var(--line);background:var(--card2);color:var(--txt);font:inherit;outline:none}
+.inp:focus{border-color:var(--acc)}
+.toolbar{display:flex;gap:8px;margin-bottom:14px}
+.toolbar .inp{flex:1;min-width:0}
+.mb{background:var(--card2);color:var(--mut);border:1px solid var(--line);border-radius:999px;padding:6px 12px;font:inherit;font-size:13px;cursor:pointer}
 .mb.on{background:var(--acc);color:#fff;border-color:var(--acc)}
-.chk{display:flex;gap:10px;align-items:flex-start;margin:16px 0;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--card2)}
+.chk{display:flex;gap:12px;align-items:flex-start;margin:18px 0;padding:14px;border:1px solid var(--line);border-radius:14px;background:var(--card)}
 .chk input{width:22px;height:22px;margin:2px 0 0;flex:none;accent-color:var(--acc)}
 .seg{display:flex;gap:8px}
-.seg button{flex:1;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--card2);color:var(--txt);font:inherit;font-weight:600}
+.seg button{flex:1;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--card2);color:var(--txt);font:inherit;font-weight:600;cursor:pointer}
 .seg button.on{background:var(--acc);border-color:var(--acc);color:#fff}
-.kv{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--line)}
+.kv{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}
 .kv:last-child{border:0}
-nav{position:fixed;bottom:0;inset-inline:0;background:var(--nav);backdrop-filter:blur(12px);
-border-top:1px solid var(--line);display:flex;padding-bottom:env(safe-area-inset-bottom)}
-nav a{flex:1;text-align:center;padding:10px 0 8px;color:var(--mut);text-decoration:none;font-size:12px}
-nav a b{display:block;font-size:20px;font-weight:400}
+nav{position:fixed;bottom:0;inset-inline:0;background:var(--nav);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-top:1px solid var(--line);display:flex;padding-bottom:env(safe-area-inset-bottom);z-index:6}
+nav a{flex:1;text-align:center;padding:10px 0 9px;color:var(--mut);text-decoration:none;font-size:12px;transition:color .15s}
+nav a b{display:block;font-size:19px;font-weight:400;line-height:1.3}
 nav a.on{color:var(--acc)}
-.empty{text-align:center;color:var(--mut);padding:50px 10px}
+#sbar{display:none;position:fixed;bottom:80px;inset-inline:12px;z-index:7;background:var(--card2);border:1px solid var(--line);border-radius:16px;padding:10px 12px;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;box-shadow:0 12px 32px rgba(0,0,0,.5)}
+#sbar.on{display:flex}
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;padding:20px;z-index:20}
+.dlg{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:20px;width:100%;max-width:360px;animation:in .2s}
+.toast{position:fixed;bottom:96px;inset-inline:0;margin-inline:auto;width:max-content;max-width:90%;background:var(--card2);border:1px solid var(--line);padding:10px 16px;border-radius:12px;z-index:30;font-size:14px;animation:in .2s}
+.empty{text-align:center;color:var(--mut);padding:60px 10px}
 details summary{cursor:pointer}
 </style>
 </head>
@@ -426,6 +557,8 @@ details summary{cursor:pointer}
  <a id="runbar" href="#/"></a>
 </header>
 <main id="app"></main>
+<div id="sbar"></div>
+<div id="modal"></div>
 <nav>
  <a href="#/" id="n-scan"><b>&#9654;</b><span></span></a>
  <a href="#/history" id="n-hist"><b>&#9776;</b><span></span></a>
@@ -439,23 +572,23 @@ let lang=LS.get('zs_lang','ar'),theme=LS.get('zs_theme','dark');
 if(lang!=='ar'&&lang!=='en')lang='ar';if(theme!=='dark'&&theme!=='light')theme='dark';
 
 const I={
-ar:{nav_scan:'فحص',nav_hist:'السجل',nav_set:'الإعدادات',reload:'تحديث',t_scan:'فحص جديد',t_hist:'السجل',t_set:'الإعدادات',t_det:'تفاصيل الفحص',
- target:'رابط الهدف',mods:'الوحدات',m_all:'الكل',m_infra:'البنية',m_origin:'المصدر',m_files:'ملفات حساسة',m_dirs:'مجلدات',m_params:'باراميترات',m_tech:'تقنيات',m_vuln:'فحص الويب',
- auth:'أؤكد أني أملك هذا الموقع أو معي إذن كتابي بفحصه. الفحص بدون إذن ممنوع قانونياً.',start:'ابدأ الفحص',stop:'إيقاف',
- bar_run:'الفحص بدأ وجاري',bar_done:'انتهى الفحص، اضغط لعرض النتيجة',running:'جاري الفحص...',
- s_done:'اكتمل الفحص',s_stop:'تم إيقاف الفحص',s_err:'انتهى بخطأ',s_cfg:'خطأ بالإعدادات',s_auth:'التفويض ناقص',saved:'انحفظ بـ',toast:'بدأ الفحص',view:'عرض النتيجة',
- search:'بحث بالهدف...',empty_hist:'ما في فحوصات بعد',done:'مكتمل',incomplete:'غير مكتمل',interrupted:'الفحص انقطع قبل ما يكتمل.',orig:'التقرير الأصلي',
- findings:'النتائج',no_find:'ما في نتائج بهالفحص.',sev_critical:'حرجة',sev_high:'عالية',sev_medium:'وسط',sev_low:'منخفضة',sev_info:'معلومة',
- f_loc:'الموقع',f_ev:'الدليل',f_fix:'طريقة الحل',f_tip:'نصيحة عامة',f_more:'تفاصيل إضافية',f_none:'غير متوفر',
- modules_h:'الوحدات',skipped_h:'وحدات تم تخطيها',raw_h:'البيانات الخام',raw_show:'عرض JSON',req:'طلبات',res:'نتائج',
- lang:'اللغة',theme:'المظهر',dark:'غامق',light:'فاتح',info:'معلومات التطبيق',ver:'الإصدار',desc:'واجهة موبايل لفحص الأمان، بتشتغل مع أداة ZeroSpecter على تيرمكس.',
- store:'مكان حفظ اللوغات',tool:'الأداة',tool_ok:'موجودة',tool_no:'غير موجودة',resp_h:'استخدام مسؤول',
- resp:'استخدم التطبيق فقط على مواقع تملكها أو معك إذن كتابي بفحصها. المستخدم مسؤول عن استخدامه.',err:'تعذّر تحميل البيانات.',m:'د',s:'ث'},
-en:{nav_scan:'Scan',nav_hist:'History',nav_set:'Settings',reload:'Refresh',t_scan:'New scan',t_hist:'History',t_set:'Settings',t_det:'Scan details',
+ar:{select:'تحديد',cancel:'إلغاء',all:'الكل',delete:'حذف',deleted:'تم الحذف',no_match:'لا توجد نتائج',selected:'محدّد',delete_sel:'حذف المحدد',delete_all:'حذف الكل',confirm_sel:'سيتم حذف الفحوصات المحددة نهائياً من الهاتف. هل أنت متأكد؟',confirm_all:'سيتم حذف جميع الفحوصات نهائياً من الهاتف. هل أنت متأكد؟',sure:'تأكيد الحذف',nav_scan:'فحص',nav_hist:'السجل',nav_set:'الإعدادات',reload:'تحديث',t_scan:'فحص جديد',t_hist:'السجل',t_set:'الإعدادات',t_det:'تفاصيل الفحص',
+ target:'رابط الهدف',mods:'الوحدات',m_all:'الكل',m_infra:'البنية التحتية',m_origin:'المصدر',m_files:'الملفات الحساسة',m_dirs:'المجلدات',m_params:'المعاملات',m_tech:'التقنيات',m_vuln:'فحص الويب',
+ auth:'أؤكد أنني أملك هذا الموقع أو لدي إذن كتابي بفحصه. الفحص دون إذن ممنوع قانونياً.',start:'ابدأ الفحص',stop:'إيقاف',
+ bar_run:'الفحص جارٍ',bar_done:'اكتمل الفحص، اضغط لعرض النتيجة',running:'جارٍ الفحص...',
+ s_done:'اكتمل الفحص',s_stop:'تم إيقاف الفحص',s_err:'انتهى بخطأ',s_cfg:'خطأ في الإعدادات',s_auth:'التفويض ناقص',saved:'حُفظ في',toast:'بدأ الفحص',view:'عرض النتيجة',st_completed:'مكتمل',st_cancelled:'أُلغي',st_skipped:'تم التخطي',st_interrupted:'انقطع',st_failed:'فشل',st_error:'خطأ',st_running:'جارٍ',
+ search:'البحث بالهدف...',empty_hist:'لا توجد فحوصات بعد',done:'مكتمل',incomplete:'غير مكتمل',interrupted:'انقطع الفحص قبل اكتماله.',orig:'التقرير الأصلي',
+ findings:'النتائج',no_find:'لا توجد نتائج لهذا الفحص.',sev_critical:'حرجة',sev_high:'عالية',sev_medium:'متوسطة',sev_low:'منخفضة',sev_info:'معلومة',
+ f_loc:'الموقع',f_ev:'الدليل',f_fix:'طريقة المعالجة',f_tip:'نصيحة عامة',f_more:'تفاصيل إضافية',f_none:'غير متوفر',
+ modules_h:'الوحدات',skipped_h:'وحدات تم تخطّيها',raw_h:'البيانات الخام',raw_show:'عرض JSON',req:'طلبات',res:'نتائج',
+ lang:'اللغة',theme:'المظهر',dark:'داكن',light:'فاتح',info:'معلومات التطبيق',ver:'الإصدار',desc:'واجهة هاتف لفحص الأمان، تعمل مع أداة ZeroSpecter على تيرمكس.',
+ store:'مكان حفظ السجلات',tool:'الأداة',tool_ok:'موجودة',tool_no:'غير موجودة',resp_h:'الاستخدام المسؤول',
+ resp:'استخدم التطبيق على مواقع تملكها أو لديك إذن كتابي بفحصها فقط. المستخدم مسؤول عن استخدامه.',err:'تعذّر تحميل البيانات.',m:'د',s:'ث'},
+en:{select:'Select',cancel:'Cancel',all:'All',delete:'Delete',deleted:'Deleted',no_match:'No matches',selected:'Selected',delete_sel:'Delete selected',delete_all:'Delete all',confirm_sel:'The selected scans will be permanently deleted from your phone. Are you sure?',confirm_all:'All scans will be permanently deleted from your phone. Are you sure?',sure:'Confirm deletion',nav_scan:'Scan',nav_hist:'History',nav_set:'Settings',reload:'Refresh',t_scan:'New scan',t_hist:'History',t_set:'Settings',t_det:'Scan details',
  target:'Target URL',mods:'Modules',m_all:'All',m_infra:'Infra',m_origin:'Origin',m_files:'Sensitive files',m_dirs:'Directories',m_params:'Parameters',m_tech:'Technology',m_vuln:'Web checks',
  auth:'I confirm I own this site or have written permission to test it. Testing without permission is illegal.',start:'Start scan',stop:'Stop',
  bar_run:'Scan started and running',bar_done:'Scan finished, tap to view the result',running:'Scanning...',
- s_done:'Scan completed',s_stop:'Scan stopped',s_err:'Finished with an error',s_cfg:'Configuration error',s_auth:'Missing authorization',saved:'Saved in',toast:'Scan started',view:'View result',
+ s_done:'Scan completed',s_stop:'Scan stopped',s_err:'Finished with an error',s_cfg:'Configuration error',s_auth:'Missing authorization',saved:'Saved in',toast:'Scan started',view:'View result',st_completed:'Completed',st_cancelled:'Cancelled',st_skipped:'Skipped',st_interrupted:'Interrupted',st_failed:'Failed',st_error:'Error',st_running:'Running',
  search:'Search by target...',empty_hist:'No scans yet',done:'Completed',incomplete:'Incomplete',interrupted:'The scan was interrupted before it finished.',orig:'Original report',
  findings:'Findings',no_find:'No findings in this scan.',sev_critical:'Critical',sev_high:'High',sev_medium:'Medium',sev_low:'Low',sev_info:'Info',
  f_loc:'Location',f_ev:'Evidence',f_fix:'How to fix',f_tip:'General tip',f_more:'More details',f_none:'Not available',
@@ -482,12 +615,19 @@ const TIPS=[
  [/header|hsts|x-frame|csp|content-security|clickjack/i,'أضف ترويسات الأمان المفقودة (HSTS، X-Frame-Options، CSP، X-Content-Type-Options).','Add the missing security headers (HSTS, X-Frame-Options, CSP, X-Content-Type-Options).'],
  [/ssl|tls|cert|https/i,'استخدم TLS 1.2+ وشهادة صالحة، وفعّل إعادة التوجيه لـ HTTPS.','Use TLS 1.2+ with a valid certificate and redirect HTTP to HTTPS.'],
  [/listing|index of|autoindex/i,'عطّل عرض محتويات المجلدات (directory listing) بإعدادات السيرفر.','Disable directory listing in the server configuration.'],
- [/\.env|\.git|backup|config|sensitive|exposed|secret|leak|\.bak|dump/i,'شيل الملفات الحساسة والنسخ الاحتياطية من مجلد الموقع العام، وامنع الوصول إليها، وغيّر أي مفاتيح أو كلمات سر ظهرت.','Remove sensitive files and backups from the web root, block access to them, and rotate any exposed keys or passwords.'],
+ [/\.env|\.git|backup|config|sensitive|secret|leak|\.bak|dump/i,'شيل الملفات الحساسة والنسخ الاحتياطية من مجلد الموقع العام، وامنع الوصول إليها، وغيّر أي مفاتيح أو كلمات سر ظهرت.','Remove sensitive files and backups from the web root, block access to them, and rotate any exposed keys or passwords.'],
+ [/redis|mongo|elastic|memcache|couch|postgres|mysql|mariadb|oracle|mssql/i,'قيّد الوصول للمنفذ بجدار ناري أو قائمة مسموح بها، وفعّل المصادقة، ولا تخلي قاعدة البيانات ظاهرة على الإنترنت.','Restrict the port with a firewall or allow-list, enable authentication, and never expose databases to the internet.'],
+ [/smb|netbios|rdp|microsoft-ds|port 445|port 139|port 3389/i,'عطّل مشاركة الملفات والخدمات البعيدة على الإنترنت، واحجب هذه المنافذ عن الشبكات الخارجية.','Disable file sharing and remote services on the internet and block these ports from external networks.'],
+ [/telnet|\bftp\b/i,'استبدل Telnet وFTP ببروتوكولات مشفّرة مثل SSH وSFTP، وامنع كلمات السر الضعيفة.','Replace Telnet and FTP with encrypted protocols such as SSH and SFTP, and block weak passwords.'],
+ [/alternate|8080|8000|8888|http proxy|port 80\b/i,'أغلق المنافذ غير المستخدمة، وإذا الخدمة لازم تكون ظاهرة، خلّيها خلف HTTPS وقيّد الوصول إليها.','Close unused ports; if the service must be reachable, put it behind HTTPS and restrict access.'],
  [/banner|version|server|disclos|fingerprint/i,'أخفِ أرقام الإصدارات ومعلومات السيرفر من الترويسات والصفحات.','Hide version numbers and server details from headers and pages.'],
  [/admin|login|panel|auth/i,'قيّد الوصول للوحة الإدارة (IP محدد أو VPN) وفعّل مصادقة قوية وحد المحاولات.','Restrict admin panels (IP allow-list or VPN), enforce strong authentication and rate limiting.']
 ];
 const TIP_DEFAULT=['حدّث البرمجيات للأحدث، وقيّد الوصول، وراجع الإعدادات المرتبطة بهذه النتيجة.','Update software, restrict access, and review the settings related to this finding.'];
 
+const MODT={'Infrastructure Reconnaissance':'استطلاع البنية التحتية','Origin IP Discovery':'اكتشاف عنوان IP الأصلي','Sensitive File Discovery':'اكتشاف الملفات الحساسة','Directory and Content Discovery':'اكتشاف المجلدات والمحتوى','Hidden Parameter Discovery':'اكتشاف المعاملات المخفية','Technology-Specific Probes':'فحوصات خاصة بالتقنيات','Web Security Assessment':'تقييم أمن الويب'};
+function modTitle(x){return (lang==='ar'&&MODT[x])?MODT[x]:x}
+function stLabel(x){const k='st_'+x;return I[lang][k]!==undefined?I[lang][k]:x}
 const app=$('#app');
 let cache=null,info={},gstate=null,tickBase=0,tickAt=0,sel=new Set(['all']),fsev=null,curScan=null;
 
@@ -506,7 +646,7 @@ function applyLook(){
  drawBar();
 }
 function setNav(k){[['scan','n-scan'],['hist','n-hist'],['set','n-set']].forEach(([a,id])=>$('#'+id).className=a===k?'on':'')}
-function show(html,title,back){
+function show(html,title,back){ selMode=false; $('#sbar').innerHTML=''; $('#sbar').classList.remove('on');
  app.innerHTML='<div class="view">'+html+'</div>';
  $('#title').textContent=title||'ZeroSpecter';
  $('#back').style.display=back?'block':'none';
@@ -604,19 +744,73 @@ async function scanView(){
 }
 
 /* ---------- السجل ---------- */
+let selMode=false, selIds=new Set(), hList=[];
 function scanCard(s){
- return `<a class="card" href="#/scan/${esc(s.id)}">
-  <div class="row sp"><b class="ltr">${esc(s.target)}</b>
+ const on=selIds.has(s.id);
+ const pad=selMode?'padding-inline-start:30px':'';
+ const pre=selMode?`<span class="ck ${on?'on':''}">${on?'&#10003;':''}</span>`:'';
+ const body=`<div class="row sp"><div class="row" style="gap:10px;min-width:0">${pre}<b class="ltr">${esc(s.target)}</b></div>
   <span class="chip ${s.completed?'c-ok':'c-medium'}">${s.completed?t('done'):t('incomplete')}</span></div>
-  <div class="mut" style="margin:4px 0 8px">${s.log?'log '+s.log+' &middot; ':''}${fdate(s.started_at)} &middot; ${fdur(s.duration)}</div>
-  <div class="row">${chips(s.severity)}</div></a>`;
+  <div class="mut" style="margin:6px 0 10px;${pad}">${s.log?'log '+s.log+' &middot; ':''}${fdate(s.started_at)} &middot; ${fdur(s.duration)}</div>
+  <div class="row" style="${pad}">${chips(s.severity)}</div>`;
+ return selMode
+  ? `<div class="card sc ${on?'picked':''}" data-id="${esc(s.id)}">${body}</div>`
+  : `<a class="card" href="#/scan/${esc(s.id)}">${body}</a>`;
 }
+function drawList(){
+ const v=(($('#q')||{}).value||'').toLowerCase();
+ const items=hList.filter(s=>(s.target||'').toLowerCase().includes(v));
+ $('#hl').innerHTML=items.length?items.map(scanCard).join(''):`<div class="empty">${t('no_match')}</div>`;
+}
+function bar2(){
+ const b=$('#sbar');
+ if(!selMode||!hList.length){b.innerHTML='';b.classList.remove('on');return}
+ b.classList.add('on');
+ b.innerHTML=`<span class="mut">${t('selected')}: <b>${selIds.size}</b></span>
+  <div class="row" style="gap:6px;justify-content:flex-end">
+  <button class="btn ghost sm" id="sall">${t('all')}</button>
+  <button class="btn danger sm" id="sdel"${selIds.size?'':' disabled'}>${t('delete_sel')}</button>
+  <button class="btn danger sm" id="sdelall">${t('delete_all')}</button></div>`;
+ $('#sall').onclick=()=>{hList.forEach(s=>selIds.add(s.id));drawList();bar2()};
+ $('#sdel').onclick=()=>confirmDel([...selIds],t('confirm_sel'));
+ $('#sdelall').onclick=()=>confirmDel(hList.map(s=>s.id),t('confirm_all'));
+}
+function confirmDel(ids,msg){
+ const m=$('#modal');
+ m.innerHTML=`<div class="scrim" id="scrim"><div class="dlg"><b>${t('sure')}</b>
+  <p class="mut" style="margin:8px 0 18px">${esc(msg)}</p>
+  <div class="row" style="justify-content:flex-end;gap:8px"><button class="btn ghost" id="no">${t('cancel')}</button>
+  <button class="btn danger" id="yes">${t('delete')}</button></div></div></div>`;
+ $('#no').onclick=()=>{m.innerHTML=''};
+ $('#scrim').onclick=e=>{if(e.target.id==='scrim')m.innerHTML=''};
+ $('#yes').onclick=async()=>{
+  $('#yes').disabled=true;
+  try{
+   const r=await post('/api/scans/delete',{ids});
+   m.innerHTML='';
+   toast(t('deleted')+': '+r.deleted);
+   cache=null;
+   await history();
+  }catch(e){m.innerHTML='';toast(e.message)}
+ };
+}
+function toast(msg){const d=document.createElement('div');d.className='toast';d.textContent=msg;document.body.appendChild(d);setTimeout(()=>d.remove(),2600)}
 async function history(){
  setNav('hist');
- const list=await scans(true);
- show(list.length?`<input id="q" class="inp ltr" placeholder="${esc(t('search'))}" style="margin-bottom:12px"><div id="hl">${list.map(scanCard).join('')}</div>`
+ hList=await scans(true);
+ selMode=false;selIds=new Set();
+ show(hList.length?`<div class="toolbar"><input id="q" class="inp ltr" placeholder="${esc(t('search'))}"><button class="btn ghost sm" id="selT">${t('select')}</button></div><div id="hl"></div>`
   :`<div class="empty">${t('empty_hist')}</div>`,t('t_hist'));
- const q=$('#q');if(q)q.oninput=()=>{const v=q.value.toLowerCase();$('#hl').innerHTML=list.filter(s=>(s.target||'').toLowerCase().includes(v)).map(scanCard).join('')};
+ if(!hList.length)return;
+ drawList();
+ $('#q').oninput=drawList;
+ $('#selT').onclick=()=>{selMode=!selMode;selIds=new Set();$('#selT').textContent=selMode?t('cancel'):t('select');drawList();bar2()};
+ $('#hl').onclick=e=>{
+  if(!selMode)return;
+  const c=e.target.closest('.sc');if(!c)return;
+  const id=c.dataset.id;selIds.has(id)?selIds.delete(id):selIds.add(id);
+  drawList();bar2();
+ };
 }
 
 /* ---------- تفاصيل فحص ---------- */
@@ -664,8 +858,8 @@ async function scanView2(id){
  const fl=Array.isArray(d.findings)?d.findings:[];
  let sev=Object.assign({},s.severity_counts||{});
  if(!SEV.some(k=>sev[k])&&fl.length){sev={};fl.forEach(f=>{const k=normSev(f.severity);sev[k]=(sev[k]||0)+1})}
- const mods=(s.modules||[]).map(m=>`<div class="card"><div class="row sp"><b>${esc(m.title||m.name)}</b>
-  <span class="chip ${m.status==='completed'?'c-ok':'c-medium'}">${esc(m.status)}</span></div>
+ const mods=(s.modules||[]).map(m=>`<div class="card"><div class="row sp"><b>${esc(modTitle(m.title||m.name))}</b>
+  <span class="chip ${m.status==='completed'?'c-ok':'c-medium'}">${esc(stLabel(m.status))}</span></div>
   <div class="mut">${t('res')}: ${m.findings??0} &middot; ${t('req')}: ${m.requests??0} &middot; ${fdur(m.duration_seconds)}</div></div>`).join('');
  const skipped=(s.coverage||{}).skipped||{};
  const sk=Object.keys(skipped).map(k=>`<div class="card"><b class="ltr">${esc(k)}</b><div class="mut">${esc(skipped[k])}</div></div>`).join('');
@@ -724,7 +918,7 @@ if __name__ == "__main__":
     print(f"ZeroSpecter {VERSION}  ->  http://127.0.0.1:{PORT}")
     print(f"اللوغات: {LOGS}")
     if not str(LOGS).startswith("/sdcard") and "storage" not in str(LOGS):
-        print("تنبيه: لحفظ اللوغات بذاكرة الجوال نفّذ:  termux-setup-storage  وبعدين أعد تشغيل السيرفر")
+        print("تنبيه: لحفظ اللوغات بذاكرة الموبايل نفّذ:  termux-setup-storage  وبعدين أعد تشغيل السيرفر")
     print(f"الأداة:   {ZS_HOME}")
     try:
         ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
