@@ -1,5 +1,5 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# تثبيت ZeroSpecter + السيرفر على تيرمكس (مرة وحدة).
+# تثبيت WebScout + السيرفر على تيرمكس (مرة وحدة).
 # إذا عندك نسختك المعدّلة على GitHub:  ZS_REPO=https://github.com/<you>/<repo>.git bash setup_termux.sh
 set -e
 
@@ -33,5 +33,5 @@ fi
 termux-reload-settings 2>/dev/null || true
 
 echo
-echo "خلص. افتح تطبيق ZeroSpecter."
+echo "خلص. افتح تطبيق WebScout."
 echo "أو شغّل يدوياً:  cd ~/zerospecter-ui && python zs_server.py"

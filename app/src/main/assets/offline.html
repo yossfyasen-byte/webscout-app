@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ZeroSpecter</title>
+<title>WebScout</title>
 <style>
 :root{color-scheme:dark}
 body{margin:0;background:#0b0d12;color:#e8ecf3;font:16px/1.7 system-ui,sans-serif;padding:24px 18px 40px;text-align:center}
@@ -23,24 +23,16 @@ button.g{background:#1c2230;color:#e8ecf3;border:1px solid #252c3b}
 <body>
 <div id="down">
   <h1>السيرفر مش شغّال</h1>
-  <p>ZeroSpecter بيشتغل عن طريق تيرمكس. اتبع الخطوات:</p>
+  <p>هالتطبيق بيشتغل بعد التفعيل.</p>
 
   <div class="card">
-    <div class="step"><span class="num">1</span><span>افتح تطبيق تيرمكس</span></div>
-    <div class="step"><span class="num">2</span><span>انسخ الأمر التالي وأدخله بتيرمكس واضغط Enter:</span></div>
-    <div class="cmd" id="cmd">cd ~/zerospecter-ui && python zs_server.py</div>
-    <button class="copy" id="copy">نسخ الأمر</button>
-    <div class="step"><span class="num">3</span><span>خلّي تيرمكس شغّال، وارجع للتطبيق. بيفتح لحاله.</span></div>
+    <div class="step"><span class="num">!</span><span>تواصل مع المطور لدليل التفعيل.</span></div>
   </div>
 
   <button id="start">تشغيل من التطبيق</button>
   <button class="g" id="retry">إعادة المحاولة</button>
   <p id="st"></p>
 
-  <div class="card">
-    <p style="margin:0 0 6px;color:#e8ecf3;font-weight:700">أول مرة؟</p>
-    <p style="margin:0">ثبّت تيرمكس من F-Droid، ونفّذ سكربت التثبيت مرة وحدة. التفاصيل بملف README.</p>
-  </div>
 </div>
 
 <div id="no">
@@ -55,7 +47,6 @@ button.g{background:#1c2230;color:#e8ecf3;border:1px solid #252c3b}
 
 <script>
 const SERVER = 'http://127.0.0.1:8765/';
-const CMD = 'cd ~/zerospecter-ui && python zs_server.py';
 const st = document.getElementById('st');
 
 function termuxOk() {
@@ -65,13 +56,6 @@ function termuxOk() {
 function toast(t) {
   try { if (window.Android && Android.toast) Android.toast(t); } catch (e) {}
 }
-document.getElementById('copy').onclick = async () => {
-  try {
-    if (window.Android && Android.copy) Android.copy(CMD);
-    else await navigator.clipboard.writeText(CMD);
-    toast('تم نسخ الأمر');
-  } catch (e) { toast('ما قدرت أنسخ، انسخه يدوياً'); }
-};
 document.getElementById('start').onclick = () => {
   if (window.Android && Android.startServer) Android.startServer();
 };

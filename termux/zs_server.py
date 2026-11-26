@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""ZeroSpecter Viewer & Runner (Termux).
+"""WebScout Viewer & Runner (Termux).
 
 سيرفر محلي بدون مكتبات خارجية:
   - يشغّل الفحص من الواجهة بعد تأكيد صريح للتفويض
-  - كل فحص يُحفظ بمجلد  ZeroSpecter/log N  فيه ملفات التقرير الأربعة
+  - كل فحص يُحفظ بمجلد  WebScout/log N  فيه ملفات التقرير الأربعة
   - يعرض النتائج بواجهة عربية/إنجليزية
   - يستمع على 127.0.0.1 فقط
 
@@ -45,10 +45,10 @@ def pick_logs():
     for base in (Path("/sdcard"), HOME / "storage" / "shared"):
         try:
             if base.is_dir() and os.access(base, os.W_OK):
-                return base / "ZeroSpecter"
+                return base / "WebScout"
         except OSError:
             pass
-    return HOME / "ZeroSpecter"
+    return HOME / "WebScout"
 
 
 LOGS = pick_logs()
@@ -156,9 +156,9 @@ def finalize(started):
         probe.write_text("1")
         probe.unlink()
     except OSError:
-        LOGS = HOME / "ZeroSpecter"
+        LOGS = HOME / "WebScout"
         LOGS.mkdir(parents=True, exist_ok=True)
-        Run.log.append("! ما قدرت أكتب بذاكرة الموبايل (شغّل termux-setup-storage). انحفظ بمجلد تيرمكس: ~/ZeroSpecter")
+        Run.log.append("! ما قدرت أكتب بذاكرة الموبايل (شغّل termux-setup-storage). انحفظ بمجلد تيرمكس: ~/WebScout")
     n = max([x for x, _ in log_dirs()] or [0]) + 1
     dest = LOGS / f"log {n}"
     dest.mkdir()
@@ -251,7 +251,7 @@ def run_status():
 
 # ---------------------------------------------------------------- http
 MANIFEST = {
-    "name": "ZeroSpecter", "short_name": "ZeroSpecter", "start_url": "/", "display": "standalone",
+    "name": "WebScout", "short_name": "WebScout", "start_url": "/", "display": "standalone",
     "background_color": "#0b0d12", "theme_color": "#0b0d12",
     "icons": [{"src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 96 96'%3E%3Crect width='96' height='96' rx='22' fill='%23ff4d6d'/%3E%3Ctext x='48' y='64' font-size='54' text-anchor='middle' fill='white'%3EZ%3C/text%3E%3C/svg%3E",
                "sizes": "any", "type": "image/svg+xml"}],
@@ -468,7 +468,7 @@ PAGE = r"""<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0b0d12">
 <link rel="manifest" href="/manifest.json">
-<title>ZeroSpecter</title>
+<title>WebScout</title>
 <style>
 :root{--bg:#000;--card:#0b0b0e;--card2:#15151a;--txt:#f4f4f7;--mut:#8b8b97;--line:#1d1d23;--pre:#040405;--hdr:rgba(0,0,0,.82);--nav:rgba(8,8,10,.92);--critical:#ff3b5c;--high:#ff8a4c;--medium:#ffc857;--low:#4cc9f0;--info:#8f9bff;--ok:#2ee6a0;--acc:#ff3b5c}
 :root[data-theme=light]{--bg:#f4f5f8;--card:#ffffff;--card2:#eceef4;--txt:#11141c;--mut:#5d6578;--line:#e0e4ec;--pre:#eef1f6;--hdr:rgba(244,245,248,.9);--nav:rgba(255,255,255,.96);--critical:#d6264a;--high:#d9650f;--medium:#a87a00;--low:#1b8db3;--info:#4a5be0;--ok:#16915f;--acc:#e0294f}
@@ -553,7 +553,7 @@ details summary{cursor:pointer}
 </head>
 <body>
 <header>
- <div class="hrow"><button class="back" id="back"></button><h1 id="title">ZeroSpecter</h1><button class="btn ghost" id="reload" style="padding:8px 14px"></button></div>
+ <div class="hrow"><button class="back" id="back"></button><h1 id="title">WebScout</h1><button class="btn ghost" id="reload" style="padding:8px 14px"></button></div>
  <a id="runbar" href="#/"></a>
 </header>
 <main id="app"></main>
@@ -581,7 +581,7 @@ ar:{select:'تحديد',cancel:'إلغاء',all:'الكل',delete:'حذف',delet
  findings:'النتائج',no_find:'لا توجد نتائج لهذا الفحص.',sev_critical:'حرجة',sev_high:'عالية',sev_medium:'متوسطة',sev_low:'منخفضة',sev_info:'معلومة',
  f_loc:'الموقع',f_ev:'الدليل',f_fix:'طريقة المعالجة',f_tip:'نصيحة عامة',f_more:'تفاصيل إضافية',f_none:'غير متوفر',
  modules_h:'الوحدات',skipped_h:'وحدات تم تخطّيها',raw_h:'البيانات الخام',raw_show:'عرض JSON',req:'طلبات',res:'نتائج',
- lang:'اللغة',theme:'المظهر',dark:'داكن',light:'فاتح',info:'معلومات التطبيق',ver:'الإصدار',desc:'واجهة هاتف لفحص الأمان، تعمل مع أداة ZeroSpecter على تيرمكس.',
+ lang:'اللغة',theme:'المظهر',dark:'داكن',light:'فاتح',info:'معلومات التطبيق',ver:'الإصدار',desc:'واجهة هاتف لفحص الأمان، تعمل مع أداة WebScout على تيرمكس.',
  store:'مكان حفظ السجلات',tool:'الأداة',tool_ok:'موجودة',tool_no:'غير موجودة',resp_h:'الاستخدام المسؤول',
  resp:'استخدم التطبيق على مواقع تملكها أو لديك إذن كتابي بفحصها فقط. المستخدم مسؤول عن استخدامه.',err:'تعذّر تحميل البيانات.',m:'د',s:'ث'},
 en:{select:'Select',cancel:'Cancel',all:'All',delete:'Delete',deleted:'Deleted',no_match:'No matches',selected:'Selected',delete_sel:'Delete selected',delete_all:'Delete all',confirm_sel:'The selected scans will be permanently deleted from your phone. Are you sure?',confirm_all:'All scans will be permanently deleted from your phone. Are you sure?',sure:'Confirm deletion',nav_scan:'Scan',nav_hist:'History',nav_set:'Settings',reload:'Refresh',t_scan:'New scan',t_hist:'History',t_set:'Settings',t_det:'Scan details',
@@ -593,7 +593,7 @@ en:{select:'Select',cancel:'Cancel',all:'All',delete:'Delete',deleted:'Deleted',
  findings:'Findings',no_find:'No findings in this scan.',sev_critical:'Critical',sev_high:'High',sev_medium:'Medium',sev_low:'Low',sev_info:'Info',
  f_loc:'Location',f_ev:'Evidence',f_fix:'How to fix',f_tip:'General tip',f_more:'More details',f_none:'Not available',
  modules_h:'Modules',skipped_h:'Skipped modules',raw_h:'Raw data',raw_show:'Show JSON',req:'requests',res:'findings',
- lang:'Language',theme:'Appearance',dark:'Dark',light:'Light',info:'App info',ver:'Version',desc:'A mobile front-end for security scanning, working with the ZeroSpecter tool on Termux.',
+ lang:'Language',theme:'Appearance',dark:'Dark',light:'Light',info:'App info',ver:'Version',desc:'A mobile front-end for security scanning, working with the WebScout tool on Termux.',
  store:'Logs folder',tool:'Tool',tool_ok:'Found',tool_no:'Not found',resp_h:'Responsible use',
  resp:'Use this app only on sites you own or have written permission to test. You are responsible for how you use it.',err:'Could not load data.',m:'m',s:'s'}
 };
@@ -648,7 +648,7 @@ function applyLook(){
 function setNav(k){[['scan','n-scan'],['hist','n-hist'],['set','n-set']].forEach(([a,id])=>$('#'+id).className=a===k?'on':'')}
 function show(html,title,back){ selMode=false; $('#sbar').innerHTML=''; $('#sbar').classList.remove('on');
  app.innerHTML='<div class="view">'+html+'</div>';
- $('#title').textContent=title||'ZeroSpecter';
+ $('#title').textContent=title||'WebScout';
  $('#back').style.display=back?'block':'none';
  window.scrollTo(0,0);
 }
@@ -886,7 +886,7 @@ async function settings(){
    <div class="k">${t('theme')}</div>
    <div class="seg" id="st"><button data-v="dark" class="${theme==='dark'?'on':''}">${t('dark')}</button><button data-v="light" class="${theme==='light'?'on':''}">${t('light')}</button></div></div>
   <h2>${t('info')}</h2>
-  <div class="card"><b>ZeroSpecter</b><p class="mut" style="margin:4px 0 8px">${t('desc')}</p>
+  <div class="card"><b>WebScout</b><p class="mut" style="margin:4px 0 8px">${t('desc')}</p>
    <div class="kv"><span>${t('ver')}</span><b class="ltr">${esc(info.version||'')}</b></div>
    <div class="kv"><span>${t('tool')}</span><b class="${info.tool?'c-ok':'c-high'}">${info.tool?t('tool_ok'):t('tool_no')}</b></div>
    <div class="kv"><span>${t('store')}</span><b class="ltr" style="font-size:13px;text-align:end">${esc(info.logs||'')}</b></div></div>
@@ -915,7 +915,7 @@ applyLook();route();
 """
 
 if __name__ == "__main__":
-    print(f"ZeroSpecter {VERSION}  ->  http://127.0.0.1:{PORT}")
+    print(f"WebScout {VERSION}  ->  http://127.0.0.1:{PORT}")
     print(f"اللوغات: {LOGS}")
     if not str(LOGS).startswith("/sdcard") and "storage" not in str(LOGS):
         print("تنبيه: لحفظ اللوغات بذاكرة الموبايل نفّذ:  termux-setup-storage  وبعدين أعد تشغيل السيرفر")

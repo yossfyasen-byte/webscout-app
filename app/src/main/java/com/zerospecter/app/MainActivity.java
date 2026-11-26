@@ -15,7 +15,7 @@ import android.webkit.WebViewClient;
 import android.widget.Toast;
 
 /**
- * يفتح واجهة ZeroSpecter اللي بتشتغل بتيرمكس على 127.0.0.1:8765.
+ * يفتح واجهة WebScout اللي بتشتغل بتيرمكس على 127.0.0.1:8765.
  * إذا السيرفر مش شغّال بتظهر صفحة بزر "تشغيل السيرفر" بيشغّله عبر Termux.
  */
 public class MainActivity extends Activity {
