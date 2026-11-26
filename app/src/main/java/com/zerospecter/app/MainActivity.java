@@ -1,4 +1,4 @@
-package com.youssef.zerospecter;
+package com.zerospecter.app;
 
 import android.app.Activity;
 import android.content.Intent;
@@ -115,11 +115,16 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** يُستدعى من صفحة offline.html فقط لتشغيل السيرفر. */
+    /** جسر بسيط: تشغيل السيرفر من صفحة offline، وإشعار من الواجهة. */
     private class Bridge {
         @JavascriptInterface
         public void startServer() {
             runOnUiThread(MainActivity.this::launchTermuxServer);
+        }
+
+        @JavascriptInterface
+        public void toast(String msg) {
+            runOnUiThread(() -> Toast.makeText(MainActivity.this, msg, Toast.LENGTH_SHORT).show());
         }
     }
 }
