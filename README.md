@@ -1,45 +1,45 @@
-# WebScout (تطبيق + تيرمكس)
+# WebScout (App + Termux)
 
-تطبيق أندرويد بسيط بيفتح واجهة عربية لأداة [ZeroSpecter](https://github.com/AlmunharifHamoudi/zerospecter)،
-والأداة نفسها بتشتغل بتيرمكس. النسخة المعدّلة والواجهة: **صاحب النسخة**.
+A simple Android app that gives a graphical interface to the [ZeroSpecter](https://github.com/AlmunharifHamoudi/zerospecter) scanner.
+The scanner itself runs inside Termux. This is a modified version of the original tool.
 
-> استخدم الأداة فقط على مواقع تملكها أو معك إذن كتابي بفحصها.
+> Use this tool only on websites you own or on sites you have written permission to test.
 
-## كيف بيشتغل
-- `termux/zs_server.py` سيرفر بايثون صغير (بدون مكتبات خارجية) على `127.0.0.1:8765`: بيعرض التقارير وبيشغّل الفحص.
-- تطبيق الأندرويد (`app/`) عبارة عن WebView بيفتح هالسيرفر، وبيقدر يشغّله عبر تيرمكس.
-- ملف `.github/workflows/build.yml` بيبني الـ APK على GitHub بدون كمبيوتر.
+## How it works
+- `termux/zs_server.py` is a small Python server (no external libraries) on `127.0.0.1:8765`. It starts scans and shows the reports.
+- The Android app (`app/`) is a WebView that opens this server. It can start the server through Termux.
+- `.github/workflows/build.yml` builds the APK on GitHub, so you do not need a computer.
 
-## 1) بناء الـ APK من الموبايل (مرة وحدة)
-1. ارفع محتوى هالمجلد على مستودع GitHub جديد (فرع `main`).
-2. افتح تبويب **Actions** > **Build APK** > **Run workflow**.
-3. بعد ما يخلص (كم دقيقة) افتح التشغيل ونزّل الملف **WebScout-apk** (zip فيه `app-debug.apk`).
-4. ثبّت الـ APK (لازم تسمح بالتثبيت من مصدر غير معروف).
+## 1) Build the APK on GitHub (one time)
+1. Upload this project to a new GitHub repository (branch `main`).
+2. Open the **Actions** tab, then **Build APK**, then **Run workflow**.
+3. When it finishes (a few minutes), open the run and download the **WebScout-apk** artifact (a zip that contains `app-debug.apk`).
+4. Install the APK. You must allow installing apps from unknown sources.
 
-لو فشل البناء، افتح سجل الخطأ وابعته لـ Claude.
+If the build fails, open the error log and share it.
 
-## 2) التثبيت على تيرمكس (لكل جهاز، مرة وحدة)
-نزّل **Termux من F-Droid** (نسخة Play القديمة ما بتشتغل)، وبعدين:
+## 2) Set up Termux (once per device)
+Install **Termux from F-Droid** (the old Google Play version does not work), then run:
 ```
 pkg install -y git
-git clone https://github.com/<اسمك>/<المستودع>.git
-bash <المستودع>/termux/setup_termux.sh
+git clone https://github.com/<your-name>/<your-repo>.git
+bash <your-repo>/termux/setup_termux.sh
 ```
-السكربت بيثبّت الحزم والأداة وبيفعّل `allow-external-apps` عشان التطبيق يقدر يشغّل السيرفر.
-تثبيت المكتبات (خصوصاً pydantic) ممكن ياخد وقت.
+The script installs the packages and the scanner, and enables `allow-external-apps` so the app can start the server.
+Installing the Python libraries (especially pydantic) can take a while.
 
-إذا عندك نسختك المعدّلة من الأداة على GitHub:
+If you have your own modified copy of the scanner on GitHub:
 ```
-ZS_REPO=https://github.com/<اسمك>/<أداتك>.git bash <المستودع>/termux/setup_termux.sh
+ZS_REPO=https://github.com/<your-name>/<your-scanner>.git bash <your-repo>/termux/setup_termux.sh
 ```
 
-## 3) الاستخدام
-- افتح تطبيق **WebScout**. إذا السيرفر مش شغّال اضغط **تشغيل السيرفر** (بيطلب إذن مرة وحدة).
-- تبويب **فحص**: اكتب الرابط، اختر الوحدات، أكّد التفويض، ابدأ.
-- أو شغّل السيرفر يدوياً: `cd ~/zerospecter-ui && python zs_server.py` وافتح `127.0.0.1:8765` بأي متصفح.
+## 3) Usage
+- Open the **WebScout** app. If the server is not running, tap **Start server** (it asks for permission once).
+- **Scan** tab: enter the URL, choose the modules, confirm authorization, and start.
+- Or start the server by hand: `cd ~/zerospecter-ui && python zs_server.py`, then open `127.0.0.1:8765` in any browser.
 
-## ملاحظات
-- السيرفر بيسمع على `127.0.0.1` فقط، وبيرفض الطلبات اللي جاية من مواقع خارجية.
-- الأداة نفسها بتفرض النطاق (scope) وبتطلب التفويض. الواجهة ما بتتجاوزهم.
-- ترخيص الأداة الأصلية MIT، ونصه موجود بشاشة "عن التطبيق".
-- إذا زر "تشغيل السيرفر" ما زبط، تأكد إن `~/.termux/termux.properties` فيه `allow-external-apps = true` ونفّذ `termux-reload-settings`.
+## Notes
+- The server listens on `127.0.0.1` only and rejects requests from external sites.
+- The scanner enforces its own scope and requires authorization. The interface does not bypass them.
+- The original scanner is released under the MIT license. See its LICENSE file.
+- If the "Start server" button does not work, check that `~/.termux/termux.properties` contains `allow-external-apps = true`, then run `termux-reload-settings`.

@@ -198,7 +198,7 @@ def start_run(target, modules):
         RUN_TMP.mkdir(parents=True, exist_ok=True)
         cmd = [sys.executable, "-c", "from zerospecter.cli import main; main()", target,
                "--yes", "--i-have-authorization", "--no-ui", "--no-open",
-               "--formats", "json,html,csv,sarif", "-o", str(RUN_TMP)]
+               "--formats", "json,html,csv,sarif", "--live", "-o", str(RUN_TMP)]
         if modules and modules != ["all"]:
             cmd += ["-m", ",".join(modules)]
         env = dict(os.environ, PYTHONPATH=str(ZS_HOME), PYTHONUNBUFFERED="1", NO_COLOR="1")
@@ -236,6 +236,43 @@ def stop_run():
     return True
 
 
+def progress_of(lines):
+    text = "\n".join(lines)
+    req = None
+    for m in re.finditer(r"requests?\D{0,4}(\d+)", text, re.I):
+        req = int(m.group(1))
+    done = total = None
+    for m in re.finditer(r"(\d+)\s*/\s*(\d+)\s*tasks?", text, re.I):
+        done, total = int(m.group(1)), int(m.group(2))
+    pct = None
+    for m in re.finditer(r"(\d{1,3}(?:\.\d)?)\s*%", text):
+        v = float(m.group(1))
+        if 0 <= v <= 100:
+            pct = v
+    return {"req": req, "done": done, "total": total, "pct": pct}
+
+
+SEV_RE = re.compile(r"CRITICAL\s+(\d+)\s+HIGH\s+(\d+)\s+MEDIUM\s+(\d+)\s+LOW\s+(\d+)\s+INFO\s+(\d+)")
+PROBE_RE = re.compile(r"^\s*(GET|POST|PUT|HEAD|OPTIONS|DELETE|PATCH)\s+(\S+)\s+(\d{3}|-)\s+(\d+)", re.M)
+
+
+def live_of(lines):
+    """قراءة آخر إطار من الأداة: الخطورة، المهام، الطلبات، وآخر probes."""
+    text = "\n".join(lines)
+    out = {"sev": None, "probes": None, "tasks": None, "total": None, "recent": []}
+    last = None
+    for m in SEV_RE.finditer(text):
+        last = m
+    if last:
+        out["sev"] = dict(zip(["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"], map(int, last.groups())))
+    for m in re.finditer(r"probes sent\s+(\d+)", text, re.I):
+        out["probes"] = int(m.group(1))
+    for m in re.finditer(r"(\d+)\s*/\s*(\d+)\s*tasks?", text, re.I):
+        out["tasks"], out["total"] = int(m.group(1)), int(m.group(2))
+    out["recent"] = [f"{m.group(1)} {m.group(2)[:60]} {m.group(3)}" for m in PROBE_RE.finditer(text)][-6:]
+    return out
+
+
 def run_status():
     return {
         "running": running(),
@@ -246,6 +283,8 @@ def run_status():
         "code": Run.code,
         "log_name": Run.logname,
         "log": list(Run.log)[-120:],
+        "progress": progress_of(list(Run.log)[-300:]),
+        "live": live_of(list(Run.log)[-400:]),
     }
 
 
@@ -303,6 +342,7 @@ pre{background:#0c0c14;border:1px solid #2a2a40;border-radius:12px;padding:10px 
 .zs-tip{margin-top:12px;padding:12px 14px;border:1px solid #2a2a40;border-radius:12px;background:#0c0c14;color:#c9c9d8;line-height:1.7}
 .zs-tip b{color:#ffb3c1;margin-inline-end:6px}
 img,svg{max-width:100%;height:auto}
+.live{margin-top:12px}.lrow{display:flex;flex-wrap:wrap;gap:6px}.lchip{border:1px solid var(--line,#24243a);border-radius:999px;padding:3px 10px;font-size:13px}.lprobes{font-size:12px;line-height:1.5;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 </style>"""
 
 
@@ -549,6 +589,23 @@ nav a.on{color:var(--acc)}
 .toast{position:fixed;bottom:96px;inset-inline:0;margin-inline:auto;width:max-content;max-width:90%;background:var(--card2);border:1px solid var(--line);padding:10px 16px;border-radius:12px;z-index:30;font-size:14px;animation:in .2s}
 .empty{text-align:center;color:var(--mut);padding:60px 10px}
 details summary{cursor:pointer}
+.wait{text-align:center;padding:8px 4px 4px}
+.ring{position:relative;width:150px;height:150px;margin:6px auto 14px}
+.ring svg{transform:rotate(-90deg);width:100%;height:100%}
+.ring.spin svg{animation:rsp 1.2s linear infinite}
+@keyframes rsp{from{transform:rotate(-90deg)}to{transform:rotate(270deg)}}
+.rb{fill:none;stroke:var(--card2);stroke-width:8}
+.rf{fill:none;stroke:var(--acc);stroke-width:8;stroke-linecap:round;transition:stroke-dasharray .6s}
+.ring b{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:26px}
+.wt{color:var(--mut);margin-bottom:14px;word-break:break-all;font-size:14px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px}
+.stat2{background:var(--card2);border:1px solid var(--line);border-radius:14px;padding:10px 4px}
+.stat2 span{display:block;font-size:11px;color:var(--mut)}
+.stat2 b{font-size:15px}
+.wait .bar{margin:0}
+.bar.ind i{width:30%!important;animation:ind 1.4s ease-in-out infinite}
+@keyframes ind{0%{margin-inline-start:-30%}100%{margin-inline-start:100%}}
+
 </style>
 </head>
 <body>
@@ -576,7 +633,7 @@ ar:{select:'تحديد',cancel:'إلغاء',all:'الكل',delete:'حذف',delet
  target:'رابط الهدف',mods:'الوحدات',m_all:'الكل',m_infra:'البنية التحتية',m_origin:'المصدر',m_files:'الملفات الحساسة',m_dirs:'المجلدات',m_params:'المعاملات',m_tech:'التقنيات',m_vuln:'فحص الويب',
  auth:'أؤكد أنني أملك هذا الموقع أو لدي إذن كتابي بفحصه. الفحص دون إذن ممنوع قانونياً.',start:'ابدأ الفحص',stop:'إيقاف',
  bar_run:'الفحص جارٍ',bar_done:'اكتمل الفحص، اضغط لعرض النتيجة',running:'جارٍ الفحص...',
- s_done:'اكتمل الفحص',s_stop:'تم إيقاف الفحص',s_err:'انتهى بخطأ',s_cfg:'خطأ في الإعدادات',s_auth:'التفويض ناقص',saved:'حُفظ في',toast:'بدأ الفحص',view:'عرض النتيجة',st_completed:'مكتمل',st_cancelled:'أُلغي',st_skipped:'تم التخطي',st_interrupted:'انقطع',st_failed:'فشل',st_error:'خطأ',st_running:'جارٍ',
+ s_done:'اكتمل الفحص',s_stop:'تم إيقاف الفحص',s_err:'انتهى بخطأ',s_cfg:'خطأ في الإعدادات',s_auth:'التفويض ناقص',saved:'حُفظ في',toast:'بدأ الفحص',view:'عرض النتيجة',elapsed:'الوقت',attempts:'المحاولات',eta:'الوقت المتبقي',eta_calc:'غير معروف',log:'سجل التنفيذ',tasks:'المهام',probes:'الطلبات',st_completed:'مكتمل',st_cancelled:'أُلغي',st_skipped:'تم التخطي',st_interrupted:'انقطع',st_failed:'فشل',st_error:'خطأ',st_running:'جارٍ',
  search:'البحث بالهدف...',empty_hist:'لا توجد فحوصات بعد',done:'مكتمل',incomplete:'غير مكتمل',interrupted:'انقطع الفحص قبل اكتماله.',orig:'التقرير الأصلي',
  findings:'النتائج',no_find:'لا توجد نتائج لهذا الفحص.',sev_critical:'حرجة',sev_high:'عالية',sev_medium:'متوسطة',sev_low:'منخفضة',sev_info:'معلومة',
  f_loc:'الموقع',f_ev:'الدليل',f_fix:'طريقة المعالجة',f_tip:'نصيحة عامة',f_more:'تفاصيل إضافية',f_none:'غير متوفر',
@@ -588,7 +645,7 @@ en:{select:'Select',cancel:'Cancel',all:'All',delete:'Delete',deleted:'Deleted',
  target:'Target URL',mods:'Modules',m_all:'All',m_infra:'Infra',m_origin:'Origin',m_files:'Sensitive files',m_dirs:'Directories',m_params:'Parameters',m_tech:'Technology',m_vuln:'Web checks',
  auth:'I confirm I own this site or have written permission to test it. Testing without permission is illegal.',start:'Start scan',stop:'Stop',
  bar_run:'Scan started and running',bar_done:'Scan finished, tap to view the result',running:'Scanning...',
- s_done:'Scan completed',s_stop:'Scan stopped',s_err:'Finished with an error',s_cfg:'Configuration error',s_auth:'Missing authorization',saved:'Saved in',toast:'Scan started',view:'View result',st_completed:'Completed',st_cancelled:'Cancelled',st_skipped:'Skipped',st_interrupted:'Interrupted',st_failed:'Failed',st_error:'Error',st_running:'Running',
+ s_done:'Scan completed',s_stop:'Scan stopped',s_err:'Finished with an error',s_cfg:'Configuration error',s_auth:'Missing authorization',saved:'Saved in',toast:'Scan started',view:'View result',elapsed:'Elapsed',attempts:'Attempts',eta:'Time left',eta_calc:'Unknown',log:'Scan log',tasks:'Tasks',probes:'Requests',st_completed:'Completed',st_cancelled:'Cancelled',st_skipped:'Skipped',st_interrupted:'Interrupted',st_failed:'Failed',st_error:'Error',st_running:'Running',
  search:'Search by target...',empty_hist:'No scans yet',done:'Completed',incomplete:'Incomplete',interrupted:'The scan was interrupted before it finished.',orig:'Original report',
  findings:'Findings',no_find:'No findings in this scan.',sev_critical:'Critical',sev_high:'High',sev_medium:'Medium',sev_low:'Low',sev_info:'Info',
  f_loc:'Location',f_ev:'Evidence',f_fix:'How to fix',f_tip:'General tip',f_more:'More details',f_none:'Not available',
@@ -665,15 +722,17 @@ function drawBar(){
  const b=$('#runbar');const st=gstate;
  if(st&&st.running){
   b.className='';b.style.display='flex';b.href='#/';
-  b.innerHTML=`<span class="spin"></span><span class="t">${esc(t('bar_run'))}: <span class="ltr" style="display:inline">${esc(st.target)}</span></span><span class="tm">${fdur(elapsed())}</span>`;
+  if(b.dataset.k!=='run'){b.dataset.k='run';
+   b.innerHTML=`<span class="spin"></span><span class="t">${esc(t('bar_run'))}: <span class="ltr" style="display:inline">${esc(st.target)}</span></span><span class="tm">${fdur(elapsed())}</span>`;}
  }else if(Date.now()<doneUntil){
   b.className='done';b.style.display='flex';b.href='#/history';
-  b.innerHTML=`<span>&#10004;</span><span class="t">${esc(t('bar_done'))}</span>`;
- }else{b.style.display='none'}
+  if(b.dataset.k!=='done'){b.dataset.k='done';
+   b.innerHTML=`<span>&#10004;</span><span class="t">${esc(t('bar_done'))}</span>`;}
+ }else{b.style.display='none';b.dataset.k=''}
 }
 function elapsed(){return gstate?(tickBase+(Date.now()-tickAt)/1000):0}
 setInterval(()=>{
- if(gstate&&gstate.running){const a=document.querySelector('.tm');if(a)a.textContent=fdur(elapsed());const c=$('#rtm');if(c)c.textContent=fdur(elapsed())}
+ if(gstate&&gstate.running){const a=document.querySelector('.tm');if(a)a.textContent=fdur(elapsed());const c=$('#rtm');if(c)c.textContent=fdur(elapsed());const w=$('#wtm');if(w)w.textContent=fdur(elapsed())}
  else if(doneUntil&&Date.now()>=doneUntil){doneUntil=0;drawBar()}
 },1000);
 
@@ -696,6 +755,49 @@ function check(){
  const ok=/^https?:\/\/\S+$/i.test(tg.value.trim())&&$('#auth').checked&&!(gstate&&gstate.running);
  $('#go').disabled=!ok;
 }
+function waitVals(st){
+ const p=st.progress||{};const el=elapsed();
+ const pct=p.pct!=null?p.pct:(p.total?Math.round(p.done/p.total*100):null);
+ let eta=null;if(pct!=null&&pct>0&&pct<100)eta=el*(100-pct)/pct;
+ return {el:el,pct:pct,att:p.req!=null?p.req:'—',etaTxt:eta==null?t('eta_calc'):'≈ '+fdur(eta)};
+}
+function waitHTML(st){
+ const v=waitVals(st);
+ return `<div class="wait">
+  <div class="ring ${v.pct==null?'spin':''}" id="wring"><svg viewBox="0 0 120 120"><circle class="rb" cx="60" cy="60" r="52"/><circle class="rf" id="wdash" cx="60" cy="60" r="52"/></svg><b id="wpct">${v.pct!=null?Math.round(v.pct)+'%':'...'}</b></div>
+  <div class="grid3">
+   <div class="stat2"><span>${t('elapsed')}</span><b id="wtm">${fdur(v.el)}</b></div>
+   <div class="stat2"><span>${t('attempts')}</span><b id="watt">${v.att}</b></div>
+   <div class="stat2"><span>${t('eta')}</span><b id="weta">${v.etaTxt}</b></div>
+  </div>
+  <div class="bar ${v.pct==null?'ind':''}" id="wbar"><i id="wbari" style="width:${v.pct!=null?v.pct:0}%"></i></div>
+  <div id="wlive"></div>
+ </div>`;
+}
+function liveHTML(st){
+ const L=st.live||{};const sv=L.sev||{};
+ const chip=(k,c)=>`<span class="lchip ${c}">${k} <b>${sv[k]!=null?sv[k]:0}</b></span>`;
+ const rows=(L.recent||[]).map(r=>`<div class="ltr">${esc(r)}</div>`).join('');
+ const tasks=L.tasks!=null?`${L.tasks}/${L.total}`:'—';
+ return `<div class="live"><div class="lrow">${chip('CRITICAL','c-critical')}${chip('HIGH','c-high')}${chip('MEDIUM','c-medium')}${chip('LOW','c-low')}${chip('INFO','c-info')}</div>
+  <div class="mut" style="margin:6px 0">${t('tasks')}: <b class="ltr">${tasks}</b> &middot; ${t('probes')}: <b class="ltr">${L.probes!=null?L.probes:'—'}</b></div>
+  <div class="lprobes ltr">${rows}</div></div>`;
+}
+function updateLive(st){
+ const box=$('#wlive');if(!box)return;
+ const h=liveHTML(st);if(box.dataset.h!==h){box.innerHTML=h;box.dataset.h=h}
+}
+function updateWait(st){
+ const v=waitVals(st);
+ const r=$('#wring');if(r)r.className='ring'+(v.pct==null?' spin':'');
+ const d=$('#wdash');if(d)d.style.strokeDasharray=v.pct!=null?(326*v.pct/100).toFixed(1)+' 326':'80 246';
+ const set=(id,txt)=>{const e=$(id);if(e&&e.textContent!==txt)e.textContent=txt};
+ set('#wpct',v.pct!=null?Math.round(v.pct)+'%':'...');
+ set('#watt',String(v.att));
+ set('#weta',v.etaTxt);
+ const bb=$('#wbar');if(bb)bb.className='bar'+(v.pct==null?' ind':'');
+ const bi=$('#wbari');if(bi)bi.style.width=(v.pct!=null?v.pct:0)+'%';
+}
 function renderRun(){
  const box=$('#runbox');if(!box)return;check();
  const st=gstate;if(!st||!st.started){box.style.display='none';return}
@@ -706,9 +808,14 @@ function renderRun(){
   const k=st.code===0?'s_done':STOPPED.includes(st.code)?'s_stop':st.code===2?'s_cfg':st.code===3?'s_auth':'s_err';
   head=`<b class="${st.code===0?'c-ok':'c-high'}">${st.code===0?'&#10004; ':''}${t(k)}</b>`;
  }
- $('#rhead').innerHTML=head;
+ const hk=st.running?'r':'d'+st.code;
+ if(box.dataset.hk!==hk){$('#rhead').innerHTML=head;box.dataset.hk=hk}
+ if(st.running){
+  if($('#wpct'))updateWait(st);else $('#rwait').innerHTML=waitHTML(st);
+  updateLive(st);
+ }else if($('#rwait').innerHTML){$('#rwait').innerHTML=''}
  $('#stop').style.display=st.running?'inline-block':'none';
- $('#rtg').textContent=st.target;
+ $('#rtg').textContent=st.running?'':st.target;
  $('#rsave').textContent=(!st.running&&st.log_name)?`${t('saved')}: ${st.log_name}`:'';
  const lg=$('#rlog');const atEnd=lg.scrollTop+lg.clientHeight>=lg.scrollHeight-20;
  lg.textContent=st.log.join('\n');if(atEnd)lg.scrollTop=lg.scrollHeight;
@@ -725,7 +832,7 @@ async function scanView(){
   <p id="err" style="color:var(--critical);margin:10px 0 0"></p></div>
   <div class="card" id="runbox" style="display:none">
    <div class="row sp"><div class="row" id="rhead"></div><button class="btn ghost" id="stop" style="display:none;padding:8px 14px">${t('stop')}</button></div>
-   <div class="mut ltr" id="rtg" style="margin:6px 0 10px"></div><pre id="rlog"></pre>
+   <div class="mut ltr" id="rtg" style="margin:6px 0 10px"></div><div id="rwait"></div><details style="margin-top:10px"><summary class="mut">${t('log')}</summary><pre id="rlog"></pre></details>
    <p class="mut" id="rsave" style="margin:10px 0 0"></p><p id="rlink" style="margin:10px 0 0"></p></div>`,t('t_scan'));
  drawMods();
  $('#mods').onclick=e=>{const k=e.target.dataset&&e.target.dataset.k;if(!k)return;
