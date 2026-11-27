@@ -38,6 +38,14 @@ ZS_REPO=https://github.com/<your-name>/<your-scanner>.git bash <your-repo>/termu
 - **Scan** tab: enter the URL, choose the modules, confirm authorization, and start.
 - Or start the server by hand: `cd ~/webscout-ui && python zs_server.py`, then open `127.0.0.1:8765` in any browser.
 
+## Activation keys (developer)
+The app will not open until a valid activation key is entered. The screen shows the device ID.
+1. On your phone, once: `bash termux/make_dev_key.sh`. Paste the printed public key into `License.java` (`PUBLIC_KEY_B64`) and rebuild the APK.
+2. In the app, open **Settings → Developer options**. Enter the user's device ID, choose the validity and the features, then generate the key.
+3. Send the key to the user. They paste it on the activation screen.
+
+Keep `~/.webscout-dev/license_private.pem` secret. Anyone with that file can create keys.
+
 ## Notes
 - The server listens on `127.0.0.1` only and rejects requests from external sites.
 - The scanner enforces its own scope and requires authorization. The interface does not bypass them.

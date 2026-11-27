@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WebScout</title>
+<style>
+:root{color-scheme:dark}
+html,body{margin:0;min-height:100%;background:#05070a;color:#e8ecf3;font-family:system-ui,sans-serif}
+.wrap{max-width:480px;margin:0 auto;padding:28px 18px 40px}
+h1{color:#ff4d6d;font-size:26px;margin:8px 0 6px}
+.mut{color:#8b93a7;font-size:14px;line-height:1.7;margin:6px 0 14px}
+.card{background:#151922;border:1px solid #252c3b;border-radius:16px;padding:16px;margin-top:14px}
+.k{color:#8b93a7;font-size:13px;margin-bottom:6px}
+code{display:block;direction:ltr;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:15px;color:#3ddc97;background:#0c0f15;border:1px solid #252c3b;border-radius:10px;padding:12px;word-break:break-all;text-align:left}
+input{width:100%;box-sizing:border-box;direction:ltr;text-align:left;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px;background:#0c0f15;color:#e8ecf3;border:1px solid #252c3b;border-radius:10px;padding:12px}
+button{width:100%;margin-top:10px;padding:13px;border:0;border-radius:12px;font-size:16px;font-weight:700;color:#fff;background:linear-gradient(90deg,#ff4d6d,#ff8fa3);cursor:pointer}
+button.ghost{background:transparent;color:#ff8fa3;border:1px solid #ff4d6d}
+#msg{color:#ff8fa3;min-height:20px;margin:12px 0 0;font-size:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>تفعيل WebScout</h1>
+  <p class="mut">التطبيق يحتاج مفتاح تفعيل قبل ما يفتح. أرسل معرّف جهازك لمن أعطاك المفتاح، وألصق المفتاح اللي يرجعلك.</p>
+  <div class="card">
+    <div class="k">معرّف جهازك</div>
+    <code id="dev">...</code>
+    <button class="ghost" id="copy">نسخ المعرّف</button>
+  </div>
+  <div class="card">
+    <div class="k">مفتاح التفعيل</div>
+    <input id="key" placeholder="WS1.…" autocomplete="off" spellcheck="false">
+    <button id="go">تفعيل</button>
+    <p id="msg"></p>
+  </div>
+</div>
+<script>
+const MSG = {invalid:'المفتاح غير صحيح.', device:'هذا المفتاح مش لهذا الجهاز.', expired:'انتهت صلاحية هذا المفتاح.'};
+const dev = document.getElementById('dev'), msg = document.getElementById('msg');
+try { dev.textContent = Android.deviceId(); } catch (e) { dev.textContent = 'غير متوفر'; }
+document.getElementById('copy').onclick = () => { try { Android.copy(dev.textContent); msg.textContent = 'تم النسخ.'; } catch (e) {} };
+document.getElementById('go').onclick = () => {
+  const key = document.getElementById('key').value.trim();
+  if (!key) { msg.textContent = 'ألصق المفتاح أولاً.'; return; }
+  let r = 'invalid';
+  try { r = Android.activate(key); } catch (e) {}
+  if (r === 'ok') { msg.textContent = 'تم التفعيل.'; return; }
+  msg.textContent = MSG[r] || MSG.invalid;
+};
+</script>
+</body>
+</html>

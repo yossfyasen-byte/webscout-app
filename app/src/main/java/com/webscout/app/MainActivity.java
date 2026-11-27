@@ -23,6 +23,7 @@ public class MainActivity extends Activity {
     private static final String SERVER = "http://127.0.0.1:8765/";
     private static final String OFFLINE = "file:///android_asset/offline.html";
     private static final String SPLASH = "file:///android_asset/splash.html";
+    private static final String ACTIVATE = "file:///android_asset/activate.html";
     private static final String RUN_PERMISSION = "com.termux.permission.RUN_COMMAND";
     private static final int REQ_RUN = 7;
 
@@ -54,7 +55,7 @@ public class MainActivity extends Activity {
             }
         });
 
-        web.loadUrl(SPLASH);
+        web.loadUrl(License.isActive(this) ? SPLASH : ACTIVATE);
     }
 
     private boolean termuxInstalled() {
@@ -126,6 +127,28 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void toast(String msg) {
             runOnUiThread(() -> Toast.makeText(MainActivity.this, msg, Toast.LENGTH_SHORT).show());
+        }
+
+        @JavascriptInterface
+        public String deviceId() {
+            return License.deviceId(MainActivity.this);
+        }
+
+        /** JSON array of enabled features, e.g. ["deep"]. Empty when not activated. */
+        @JavascriptInterface
+        public String features() {
+            return License.featuresJson(MainActivity.this);
+        }
+
+        /** Returns "ok" on success, otherwise a reason code: invalid, device, expired. */
+        @JavascriptInterface
+        public String activate(String key) {
+            String r = License.verify(MainActivity.this, key);
+            if ("ok".equals(r)) {
+                License.save(MainActivity.this, key);
+                runOnUiThread(() -> web.loadUrl(SPLASH));
+            }
+            return r;
         }
 
         @JavascriptInterface
