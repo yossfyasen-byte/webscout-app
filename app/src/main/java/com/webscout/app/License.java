@@ -21,7 +21,7 @@ import java.security.spec.X509EncodedKeySpec;
 final class License {
 
     // Public key only (DER, base64). Create the key pair with termux/make_dev_key.sh and paste it here.
-    static final String PUBLIC_KEY_B64 = "PASTE_PUBLIC_KEY_HERE";
+    static final String PUBLIC_KEY_B64 = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwEWbt+eiIAmDSXerTLDDKVF+bBX85nwelB3FeBQtglHNhN4sjx9xF4SDjzpxLF3jYdaEeLmGFX9JPWf2gG+vWNOrRwe5HlZDk234uMGJ/k7RZUVXDfjxHCia5OmAEfhpNIeNo0H0q5fyG68XaWDMNiGmD4eGnyvLA+uA04t2gkQT0trCm9FgExiWmcBqaRG0ihv3PVxqMM4weGHs/skU6ZC/FRSY4JKwmKvjD5bQXMIBpY7R/LHe7+lOxXHczAHPNpb9V3wRqopIHsacUXx0tulPCHRRc9FWD7GxIkzDOeV5LUvEbbkJiMFvsDpTX/AmXUqMzjcG1Og4ijgS9TqcJQIDAQAB";
 
     private static final String PREF = "license";
 
