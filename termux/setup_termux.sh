@@ -8,8 +8,7 @@ REPO_URL="${ZS_REPO:-https://github.com/yossfyasen-byte/webscout-engine.git}"
 
 echo "[1/5] Installing packages..."
 pkg update -y && pkg upgrade -y
-pkg install -y python git rust clang make binutils pkg-config libffi openssl openssl-tool libsqlite termux-tools
-termux-setup-storage 2>/dev/null || true
+pkg install -y python git rust clang make binutils pkg-config libffi openssl libsqlite
 
 echo "[2/5] Downloading the scanner..."
 if [ ! -d "$HOME/webscout-engine" ]; then
