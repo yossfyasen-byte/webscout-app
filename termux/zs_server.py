@@ -9,6 +9,7 @@ Local server with no external libraries:
 
 Run:  python zs_server.py      then open  http://127.0.0.1:8765
 """
+import base64
 import json
 import os
 import re
@@ -27,7 +28,7 @@ HOME = Path.home()
 PORT = int(os.environ.get("PORT", "8765"))
 HOSTS = {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}
 ZS_HOME = Path(os.environ.get("ZS_HOME", str(HOME / "webscout-engine"))).expanduser()
-REPORTS = Path(os.environ.get("ZS_REPORTS", str(HOME / ".webscout" / "reports"))).expanduser()  # legacy
+REPORTS = Path(os.environ.get("ZS_REPORTS", str(HOME / ".webscout" / "reports"))).expanduser()  # fallback folder, used only if -o is ignored
 RUN_TMP = Path(os.environ.get("ZS_TMP", str(HOME / ".zs_run"))).expanduser()
 
 ID_RE = re.compile(r"^[A-Za-z0-9]{6,32}$")
@@ -35,6 +36,12 @@ LOG_RE = re.compile(r"^log (\d+)$")
 TARGET_RE = re.compile(r"^https?://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:\d{1,5})?(/[^\s]*)?$")
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 MODULES = ["infra", "origin", "files", "dirs", "params", "tech", "vuln"]
+DEV_KEY = HOME / ".webscout-dev" / "license_private.pem"  # exists only on the developer's phone
+DEV_FEATURES = {"deep"}
+DEVICE_RE = re.compile(r"^[0-9a-f]{8,32}$")
+NAME_RE = re.compile(base64.b64decode(b"VmxQXzEyfEFsbXVuaGFyaWZcdyp8TW9kZGVyfFlvdXNzZWZ8WmVyb1NwZWN0ZXJ8emVyb3NwZWN0ZXI=").decode(), re.I)  # encoded: keeps the words out of plain text
+CATCH_PORTS = (47931, 51337, 39119)
+HIDDEN_KEYS = {"developer", base64.b64decode(b"bW9kZGVy").decode()}  # internal fields never shown
 
 
 def pick_logs():
@@ -122,7 +129,7 @@ def public_scan(d):
     """Strip internal fields from the raw data before serving it."""
     if not isinstance(d, dict):
         return d
-    out = {k: v for k, v in d.items() if str(k).lower() not in ("modder", "developer")}
+    out = {k: v for k, v in d.items() if str(k).lower() not in HIDDEN_KEYS}
     # The raw file nests findings under report.modules[].findings; flatten them for the UI.
     if not isinstance(out.get("findings"), list):
         flat = []
@@ -152,21 +159,32 @@ def running():
     return Run.proc is not None and Run.ended is None
 
 
+def scrub(obj):
+    """Remove the developer field and author names from every string in a report."""
+    if isinstance(obj, dict):
+        return {k: scrub(v) for k, v in obj.items() if str(k).lower() not in HIDDEN_KEYS}
+    if isinstance(obj, list):
+        return [scrub(x) for x in obj]
+    if isinstance(obj, str):
+        return NAME_RE.sub("", obj)
+    return obj
+
+
 def sanitize_reports(files, catch_all):
-    """Clean reports: remove the developer name and downgrade port findings if the site accepts all ports."""
+    """Remove author names; if the site accepts all ports, mark port findings as unreliable."""
     counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
     for p in files:
         try:
             if p.suffix == ".json":
-                data = json.loads(p.read_text(encoding="utf-8"))
-                data.pop("developer", None)
+                data = scrub(json.loads(p.read_text(encoding="utf-8")))
                 for mod in (data.get("report", {}).get("modules") or []):
                     for f in mod.get("findings") or []:
                         if catch_all and f.get("check") == "exposed-service":
                             f["severity"] = "info"
                             f["catch_all"] = True
                             f["impact"] = "Unreliable result: the site accepts connections on all ports."
-                        counts[f.get("severity", "info")] = counts.get(f.get("severity", "info"), 0) + 1
+                        sev = f.get("severity", "info")
+                        counts[sev] = counts.get(sev, 0) + 1
                     for o in mod.get("observations") or []:
                         if catch_all and o.get("kind") == "port":
                             o["severity"] = "info"
@@ -176,8 +194,19 @@ def sanitize_reports(files, catch_all):
             elif p.suffix == ".html":
                 html = p.read_text(encoding="utf-8")
                 html = re.sub(r"<p>\s*Developed by.*?</p>", "", html, flags=re.S)
-                p.write_text(html, encoding="utf-8")
+                p.write_text(NAME_RE.sub("", html), encoding="utf-8")
+            elif p.suffix in (".csv", ".sarif"):
+                p.write_text(NAME_RE.sub("", p.read_text(encoding="utf-8")), encoding="utf-8")
         except Exception:
+            pass
+
+
+def scrub_old_reports():
+    """Startup cleanup: strip author names from reports saved before this version."""
+    for _, d in log_dirs():
+        try:
+            sanitize_reports([p for p in d.iterdir() if p.is_file()], False)
+        except OSError:
             pass
 
 
@@ -230,16 +259,52 @@ def pump(proc):
 
 
 def catch_all_check(target):
-    """Check whether the site accepts a connection on a random port (meaning port results are unreliable)."""
+    """Probe a few random ports; if most accept, the site accepts everything and port results are unreliable."""
     from urllib.parse import urlparse
     import socket
     host = urlparse(target).hostname or target
     try:
         ip = socket.gethostbyname(host)
-        with socket.create_connection((ip, 47931), timeout=3):
-            return True
     except Exception:
         return False
+    hits = 0
+    for port in CATCH_PORTS:
+        try:
+            with socket.create_connection((ip, port), timeout=2):
+                hits += 1
+        except Exception:
+            pass
+    return hits >= 2
+
+
+def b64url(raw):
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def make_key(data):
+    """Create an activation key "WS1.<payload>.<signature>" signed with the developer's private key."""
+    device = str(data.get("device", "")).strip().lower()
+    if not DEVICE_RE.match(device):
+        return None, "invalid device id"
+    days = data.get("days", 0)
+    if not isinstance(days, int) or isinstance(days, bool) or not 0 <= days <= 3650:
+        return None, "invalid duration"
+    feats = data.get("features", [])
+    if not isinstance(feats, list) or not all(f in DEV_FEATURES for f in feats):
+        return None, "invalid features"
+    if not DEV_KEY.is_file():
+        return None, "private key not found on this device (run termux/make_dev_key.sh)"
+    exp = int(time.time()) + days * 86400 if days else 0
+    body = json.dumps({"d": device, "e": exp, "f": sorted(set(feats))}, separators=(",", ":")).encode()
+    payload = b64url(body)
+    try:
+        r = subprocess.run(["openssl", "dgst", "-sha256", "-sign", str(DEV_KEY)],
+                           input=payload.encode(), capture_output=True, timeout=20)
+    except Exception as e:
+        return None, f"signing failed: {e}"
+    if r.returncode or not r.stdout:
+        return None, "signing failed"
+    return f"WS1.{payload}.{b64url(r.stdout)}", None
 
 
 def start_run(target, modules, deep=False):
@@ -508,7 +573,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/manifest.json":
             return self.json(MANIFEST)
         if path == "/api/info":
-            return self.json({"version": VERSION, "logs": str(LOGS), "tool": ZS_HOME.is_dir()})
+            return self.json({"version": VERSION, "logs": str(LOGS), "tool": ZS_HOME.is_dir(), "dev": DEV_KEY.is_file()})
         if path == "/api/scans":
             return self.json(list_scans())
         if path == "/api/run":
@@ -561,6 +626,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.json({"deleted": delete_scans(ids)})
         if path == "/api/run/stop":
             return self.json({"ok": stop_run()})
+        if path == "/api/dev/keygen":
+            key, err = make_key(data)
+            return self.json({"key": key} if key else {"error": err}, 200 if key else 400)
         self.json({"error": "not found"}, 404)
 
 
@@ -669,6 +737,7 @@ details summary{cursor:pointer}
 .bar.ind i{width:30%!important;animation:ind 1.4s ease-in-out infinite}
 @keyframes ind{0%{margin-inline-start:-30%}100%{margin-inline-start:100%}}
 
+.chk.locked{opacity:.6;cursor:not-allowed}.chk.locked span{text-decoration:line-through;text-decoration-color:#ff4d6d;text-decoration-thickness:2px;color:var(--critical)}.vip{font-style:normal;margin-inline-start:auto;font-size:12px;color:#ff8fa3;border:1px solid #ff4d6d;border-radius:999px;padding:2px 8px;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -692,7 +761,7 @@ let lang=LS.get('zs_lang','ar'),theme=LS.get('zs_theme','dark');
 if(lang!=='ar'&&lang!=='en')lang='ar';if(theme!=='dark'&&theme!=='light')theme='dark';
 
 const I={
-ar:{select:'تحديد',cancel:'إلغاء',all:'الكل',delete:'حذف',deleted:'تم الحذف',no_match:'لا توجد نتائج',selected:'محدّد',delete_sel:'حذف المحدد',delete_all:'حذف الكل',confirm_sel:'سيتم حذف الفحوصات المحددة نهائياً من الهاتف. هل أنت متأكد؟',confirm_all:'سيتم حذف جميع الفحوصات نهائياً من الهاتف. هل أنت متأكد؟',sure:'تأكيد الحذف',nav_scan:'فحص',nav_hist:'السجل',nav_set:'الإعدادات',reload:'تحديث',t_scan:'فحص جديد',t_hist:'السجل',t_set:'الإعدادات',t_det:'تفاصيل الفحص',
+ar:{vip_only:'هذه الميزة لأعضاء VIP فقط',need_lic:'يحتاج ترخيص',dev:'خيارات المطور',t_dev:'خيارات المطور',dev_dev:'معرّف الجهاز',dev_days:'مدة الصلاحية (أيام)',dev_forever:'بدون انتهاء',dev_feat:'الميزات المفعّلة',dev_f_deep:'فحص عميق وشامل',dev_gen:'توليد المفتاح',dev_key:'مفتاح التفعيل',dev_copy:'نسخ المفتاح',dev_fail:'فشل التوليد',dev_hint:'معرّف الجهاز بيظهر للمستخدم بشاشة التفعيل.',select:'تحديد',cancel:'إلغاء',all:'الكل',delete:'حذف',deleted:'تم الحذف',no_match:'لا توجد نتائج',selected:'محدّد',delete_sel:'حذف المحدد',delete_all:'حذف الكل',confirm_sel:'سيتم حذف الفحوصات المحددة نهائياً من الهاتف. هل أنت متأكد؟',confirm_all:'سيتم حذف جميع الفحوصات نهائياً من الهاتف. هل أنت متأكد؟',sure:'تأكيد الحذف',nav_scan:'فحص',nav_hist:'السجل',nav_set:'الإعدادات',reload:'تحديث',t_scan:'فحص جديد',t_hist:'السجل',t_set:'الإعدادات',t_det:'تفاصيل الفحص',
  target:'رابط الهدف',mods:'الوحدات',m_all:'الكل',m_infra:'البنية التحتية',m_origin:'المصدر',m_files:'الملفات الحساسة',m_dirs:'المجلدات',m_params:'المعاملات',m_tech:'التقنيات',m_vuln:'فحص الويب',
  auth:'أؤكد أنني أملك هذا الموقع أو لدي إذن كتابي بفحصه. الفحص دون إذن ممنوع قانونياً.',start:'ابدأ الفحص',stop:'إيقاف',
  bar_run:'الفحص جارٍ',bar_done:'اكتمل الفحص، اضغط لعرض النتيجة',running:'جارٍ الفحص...',
@@ -704,7 +773,7 @@ ar:{select:'تحديد',cancel:'إلغاء',all:'الكل',delete:'حذف',delet
  lang:'اللغة',theme:'المظهر',dark:'داكن',light:'فاتح',info:'معلومات التطبيق',ver:'الإصدار',desc:'واجهة هاتف لفحص الأمان، تعمل مع أداة WebScout على تيرمكس.',
  store:'مكان حفظ السجلات',tool:'الأداة',tool_ok:'موجودة',tool_no:'غير موجودة',resp_h:'الاستخدام المسؤول',
  resp:'استخدم التطبيق على مواقع تملكها أو لديك إذن كتابي بفحصها فقط. المستخدم مسؤول عن استخدامه.',err:'تعذّر تحميل البيانات.',m:'د',s:'ث'},
-en:{select:'Select',cancel:'Cancel',all:'All',delete:'Delete',deleted:'Deleted',no_match:'No matches',selected:'Selected',delete_sel:'Delete selected',delete_all:'Delete all',confirm_sel:'The selected scans will be permanently deleted from your phone. Are you sure?',confirm_all:'All scans will be permanently deleted from your phone. Are you sure?',sure:'Confirm deletion',nav_scan:'Scan',nav_hist:'History',nav_set:'Settings',reload:'Refresh',t_scan:'New scan',t_hist:'History',t_set:'Settings',t_det:'Scan details',
+en:{vip_only:'This feature is for VIP users only',need_lic:'needs license',dev:'Developer options',t_dev:'Developer options',dev_dev:'Device ID',dev_days:'Validity (days)',dev_forever:'No expiry',dev_feat:'Enabled features',dev_f_deep:'Deep full scan',dev_gen:'Generate key',dev_key:'Activation key',dev_copy:'Copy key',dev_fail:'Generation failed',dev_hint:'The device ID is shown to the user on the activation screen.',select:'Select',cancel:'Cancel',all:'All',delete:'Delete',deleted:'Deleted',no_match:'No matches',selected:'Selected',delete_sel:'Delete selected',delete_all:'Delete all',confirm_sel:'The selected scans will be permanently deleted from your phone. Are you sure?',confirm_all:'All scans will be permanently deleted from your phone. Are you sure?',sure:'Confirm deletion',nav_scan:'Scan',nav_hist:'History',nav_set:'Settings',reload:'Refresh',t_scan:'New scan',t_hist:'History',t_set:'Settings',t_det:'Scan details',
  target:'Target URL',mods:'Modules',m_all:'All',m_infra:'Infra',m_origin:'Origin',m_files:'Sensitive files',m_dirs:'Directories',m_params:'Parameters',m_tech:'Technology',m_vuln:'Web checks',
  auth:'I confirm I own this site or have written permission to test it. Testing without permission is illegal.',start:'Start scan',stop:'Stop',
  bar_run:'Scan started and running',bar_done:'Scan finished, tap to view the result',running:'Scanning...',
@@ -751,6 +820,7 @@ function stLabel(x){const k='st_'+x;return I[lang][k]!==undefined?I[lang][k]:x}
 const app=$('#app');
 let cache=null,info={},gstate=null,tickBase=0,tickAt=0,sel=new Set(['all']),fsev=null,curScan=null;
 
+function licFeatures(){try{const a=JSON.parse(window.Android&&Android.features?Android.features():'[]');return Array.isArray(a)?a:[]}catch(e){return []}}
 async function api(p){const r=await fetch(p);if(!r.ok)throw new Error(r.status);return r.json()}
 async function post(p,b){const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json','X-ZS':'1'},body:JSON.stringify(b||{})});
  const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||r.status);return j}
@@ -886,11 +956,12 @@ function renderRun(){
 }
 async function scanView(){
  setNav('scan');
+ const canDeep=licFeatures().includes('deep');
  show(`<div class="card">
   <label class="lbl" for="tg">${t('target')}</label>
   <input id="tg" class="inp ltr" placeholder="https://example.com" inputmode="url" autocapitalize="off" autocomplete="off" spellcheck="false">
   <label class="lbl">${t('mods')}</label><div class="row" id="mods"></div>
-  <label class="chk"><input type="checkbox" id="deep"><span>${t('deep')}</span></label>
+  <label class="chk${canDeep?'':' locked'}" id="deeplbl"><input type="checkbox" id="deep"${canDeep?'':' disabled'}><span>${t('deep')}</span>${canDeep?'':'<em class="vip">&#128274; VIP</em>'}</label>
   <label class="chk"><input type="checkbox" id="auth"><span>${t('auth')}</span></label>
   <button class="btn" id="go" disabled style="width:100%">${t('start')}</button>
   <p id="err" style="color:var(--critical);margin:10px 0 0"></p></div>
@@ -905,7 +976,7 @@ async function scanView(){
  $('#go').onclick=async()=>{
   $('#err').textContent='';$('#go').disabled=true;
   try{
-   await post('/api/run',{target:$('#tg').value.trim(),modules:[...sel],authorized:$('#auth').checked,deep:$('#deep').checked});
+   await post('/api/run',{target:$('#tg').value.trim(),modules:[...sel],authorized:$('#auth').checked,deep:$('#deep').checked&&canDeep});
    try{navigator.vibrate&&navigator.vibrate(80)}catch(e){}
    try{window.Android&&Android.toast&&Android.toast(t('toast'))}catch(e){}
    await gpoll();window.scrollTo(0,0);
@@ -1001,7 +1072,7 @@ function findingHTML(f){
  const sev=normSev(f.severity);
  const tstr=txt(title||'finding');
  const sub=(kc&&txt(cat)!==tstr)?`<div class="mut">${esc(txt(cat))}</div>`:'';
- const rest={};Object.keys(f).forEach(k=>{if(!used.has(k)&&String(k).toLowerCase()!=='modder')rest[k]=f[k]});
+ const rest={};Object.keys(f).forEach(k=>{if(!used.has(k))rest[k]=f[k]});
  const na=`<span class="mut">${t('f_none')}</span>`;
  const where=loc?esc(txt(loc))+(par?` <span class="mut">(${esc(txt(par))})</span>`:''):na;
  const evHTML=ev!==''?`<pre>${esc(txt(ev)).slice(0,2500)}</pre>`:na;
@@ -1056,6 +1127,7 @@ async function settings(){
    <div class="seg" id="sl"><button data-v="ar" class="${lang==='ar'?'on':''}">العربية</button><button data-v="en" class="${lang==='en'?'on':''}">English</button></div>
    <div class="k">${t('theme')}</div>
    <div class="seg" id="st"><button data-v="dark" class="${theme==='dark'?'on':''}">${t('dark')}</button><button data-v="light" class="${theme==='light'?'on':''}">${t('light')}</button></div></div>
+  ${info.dev?`<div class="card"><button class="btn ghost" id="devbtn" style="width:100%">${t('dev')}</button></div>`:''}
   <h2>${t('info')}</h2>
   <div class="card"><b>WebScout</b><p class="mut" style="margin:4px 0 8px">${t('desc')}</p>
    <div class="kv"><span>${t('ver')}</span><b class="ltr">${esc(info.version||'')}</b></div>
@@ -1064,6 +1136,30 @@ async function settings(){
   <div class="card"><b>${t('resp_h')}</b><p class="mut" style="margin:6px 0 0">${t('resp')}</p></div>`,t('t_set'));
  $('#sl').onclick=e=>{const v=e.target.dataset&&e.target.dataset.v;if(!v)return;lang=v;LS.set('zs_lang',v);applyLook();settings()};
  $('#st').onclick=e=>{const v=e.target.dataset&&e.target.dataset.v;if(!v)return;theme=v;LS.set('zs_theme',v);applyLook();settings()};
+ if(info.dev)$('#devbtn').onclick=()=>{location.hash='#/dev'};
+}
+
+async function devView(){
+ setNav('set');
+ show(`<div class="card">
+  <label class="lbl" for="dev_d">${t('dev_dev')}</label>
+  <input id="dev_d" class="inp ltr" placeholder="0123456789abcdef" autocomplete="off" spellcheck="false">
+  <label class="lbl">${t('dev_days')}</label>
+  <select id="dev_days" class="inp"><option value="7">7</option><option value="30" selected>30</option><option value="90">90</option><option value="365">365</option><option value="0">${t('dev_forever')}</option></select>
+  <label class="lbl">${t('dev_feat')}</label>
+  <label class="chk"><input type="checkbox" id="dev_f_deep" checked><span>${t('dev_f_deep')}</span></label>
+  <p class="mut" style="margin:10px 0">${t('dev_hint')}</p>
+  <button class="btn" id="dev_go" style="width:100%">${t('dev_gen')}</button>
+  <p id="dev_err" style="color:var(--critical);margin:10px 0 0"></p>
+  <div id="dev_out"></div></div>`,t('t_dev'),true);
+ $('#dev_go').onclick=async()=>{
+  $('#dev_err').textContent='';$('#dev_out').innerHTML='';
+  try{
+   const r=await post('/api/dev/keygen',{device:$('#dev_d').value.trim().toLowerCase(),days:Number($('#dev_days').value),features:$('#dev_f_deep').checked?['deep']:[]});
+   $('#dev_out').innerHTML=`<div class="k">${t('dev_key')}</div><pre class="ltr" id="dev_key">${esc(r.key)}</pre><button class="btn ghost" id="dev_copy" style="width:100%">${t('dev_copy')}</button>`;
+   $('#dev_copy').onclick=()=>{try{Android.copy(r.key)}catch(e){try{navigator.clipboard.writeText(r.key)}catch(e2){}}};
+  }catch(e){$('#dev_err').textContent=t('dev_fail')+': '+e.message}
+ };
 }
 
 async function route(){
@@ -1073,9 +1169,11 @@ async function route(){
   else if(h==='#/last')await scanView2('last');
   else if(h==='#/history')await history();
   else if(h==='#/settings')await settings();
+  else if(h==='#/dev'){if(info.dev)await devView();else await settings()}
   else await scanView();
  }catch(e){show(`<div class="empty">${t('err')}<br><span class="mut">${esc(e.message)}</span></div>`)}
 }
+document.addEventListener('click',e=>{const l=e.target.closest&&e.target.closest('#deeplbl.locked');if(l){e.preventDefault();const er=document.getElementById('err');if(er)er.textContent=t('vip_only')}});
 $('#back').onclick=()=>history.length>1?history.back():(location.hash='#/history');
 $('#reload').onclick=async()=>{cache=null;await route()};
 addEventListener('hashchange',route);
@@ -1086,6 +1184,7 @@ applyLook();route();
 """
 
 if __name__ == "__main__":
+    scrub_old_reports()
     print(f"WebScout {VERSION}  ->  http://127.0.0.1:{PORT}")
     print(f"Logs: {LOGS}")
     if not str(LOGS).startswith("/sdcard") and "storage" not in str(LOGS):
