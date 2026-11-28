@@ -134,6 +134,12 @@ public class MainActivity extends Activity {
             return License.deviceId(MainActivity.this);
         }
 
+        /** Stored activation key, sent to the server with deep scans. */
+        @JavascriptInterface
+        public String licenseKey() {
+            return License.key(MainActivity.this);
+        }
+
         /** JSON array of enabled features, e.g. ["deep"]. Empty when not activated. */
         @JavascriptInterface
         public String features() {

@@ -16,6 +16,7 @@ import re
 import shutil
 import signal
 import subprocess
+import tempfile
 import sys
 import threading
 import time
@@ -281,6 +282,46 @@ def b64url(raw):
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
+_cpu_prev = None
+GPU_PATHS = ["/sys/class/kgsl/kgsl-3d0/gpu_busy_percentage", "/sys/class/misc/mali0/device/utilization",
+             "/sys/devices/platform/mali.0/utilization", "/sys/kernel/gpu/gpu_busy"]
+
+def read_file(p):
+    try:
+        return Path(p).read_text().strip()
+    except Exception:
+        return None
+
+def sys_stats():
+    global _cpu_prev
+    cpu = None
+    try:
+        parts = [int(x) for x in Path("/proc/stat").read_text().splitlines()[0].split()[1:]]
+        idle = parts[3] + parts[4]
+        total = sum(parts)
+        if _cpu_prev:
+            dt, di = total - _cpu_prev[0], idle - _cpu_prev[1]
+            cpu = round(100 * (1 - di / dt), 1) if dt > 0 else None
+        _cpu_prev = (total, idle)
+    except Exception:
+        pass
+    ram = None
+    try:
+        mi = {l.split(":")[0]: int(l.split()[1]) for l in Path("/proc/meminfo").read_text().splitlines()}
+        ram = round(100 * (1 - mi["MemAvailable"] / mi["MemTotal"]), 1)
+    except Exception:
+        pass
+    gpu = None
+    for p in GPU_PATHS:
+        v = read_file(p)
+        if v and v.rstrip("%").isdigit():
+            gpu = int(v.rstrip("%"))
+            break
+    cores = os.cpu_count() or 1
+    if cpu is None:
+        cpu = min(100.0, round(os.getloadavg()[0] / cores * 100, 1))
+    return {"cpu": cpu, "ram": ram, "gpu": gpu, "cores": cores, "load": round(os.getloadavg()[0], 2)}
+
 def make_key(data):
     """Create an activation key "WS1.<payload>.<signature>" signed with the developer's private key."""
     device = str(data.get("device", "")).strip().lower()
@@ -305,6 +346,55 @@ def make_key(data):
     if r.returncode or not r.stdout:
         return None, "signing failed"
     return f"WS1.{payload}.{b64url(r.stdout)}", None
+
+
+LIC_PUB = Path(__file__).resolve().parent / "license_pub.b64"
+_pem_cache = None
+
+def _pub_pem():
+    """Public key (DER base64 from make_dev_key.sh) converted to PEM for openssl. None if missing."""
+    global _pem_cache
+    if _pem_cache is None and LIC_PUB.is_file():
+        try:
+            der = base64.b64decode(LIC_PUB.read_text().strip())
+            r = subprocess.run(["openssl", "pkey", "-pubin", "-inform", "DER", "-outform", "PEM"],
+                               input=der, capture_output=True, timeout=20)
+            if r.returncode == 0 and r.stdout:
+                _pem_cache = r.stdout
+        except Exception:
+            pass
+    return _pem_cache
+
+def lic_ok(key, device):
+    """True when this device may run a deep scan: the developer's own device, or a valid VIP key bound to this device."""
+    if DEV_KEY.is_file():
+        return True
+    pem = _pub_pem()
+    if not pem or not key or not device:
+        return False
+    try:
+        parts = key.strip().split(".")
+        if len(parts) != 3 or parts[0] != "WS1":
+            return False
+        payload = parts[1].encode()
+        sig = base64.urlsafe_b64decode(parts[2] + "=" * (-len(parts[2]) % 4))
+        body = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)))
+    except Exception:
+        return False
+    if str(body.get("d", "")).lower() != device.strip().lower():
+        return False
+    exp = body.get("e", 0)
+    if exp and time.time() > exp:
+        return False
+    if "deep" not in (body.get("f") or []):
+        return False
+    with tempfile.TemporaryDirectory() as td:
+        pf, sf = Path(td) / "pub.pem", Path(td) / "sig.bin"
+        pf.write_bytes(pem)
+        sf.write_bytes(sig)
+        r = subprocess.run(["openssl", "dgst", "-sha256", "-verify", str(pf), "-signature", str(sf)],
+                           input=payload, capture_output=True, timeout=20)
+    return r.returncode == 0
 
 
 def start_run(target, modules, deep=False):
@@ -574,6 +664,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.json(MANIFEST)
         if path == "/api/info":
             return self.json({"version": VERSION, "logs": str(LOGS), "tool": ZS_HOME.is_dir(), "dev": DEV_KEY.is_file()})
+        if path == "/api/stats":
+            return self.json(sys_stats())
         if path == "/api/scans":
             return self.json(list_scans())
         if path == "/api/run":
@@ -612,6 +704,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json({"error": "authorization required"}, 400)
             if not TARGET_RE.match(target):
                 return self.json({"error": "invalid target (http:// or https://)"}, 400)
+            if data.get("deep") is True and not lic_ok(self.headers.get("X-ZS-Lic", ""), self.headers.get("X-ZS-Dev", "")):
+                return self.json({"error": "deep scan needs a VIP license"}, 403)
             mods = data.get("modules") or ["all"]
             if not isinstance(mods, list) or not all(m == "all" or m in MODULES for m in mods):
                 return self.json({"error": "invalid modules"}, 400)
@@ -677,7 +771,10 @@ a.card:active{transform:scale(.985);background:var(--card2)}
 .stat{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px}
 .stat b{display:block;font-size:28px;font-weight:700;letter-spacing:-.5px}
 .bar{display:flex;height:8px;border-radius:99px;overflow:hidden;background:var(--card2);margin:12px 0}
-.bar i{display:block;transition:width .6s}
+.bar i{display:block;height:100%;min-width:0;background:linear-gradient(90deg,#ff4d6d,#ff8fa3);transition:width .6s}
+.wait .bar i{background:linear-gradient(90deg,#0ea5e9,#38bdf8);box-shadow:0 0 10px rgba(56,189,248,.6)}
+.sbar .bar{height:6px;margin:0}
+.sbar .bar i{background:linear-gradient(90deg,#0ea5e9,#38bdf8)}
 .tiles{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin:14px 0 4px}
 .tile{background:var(--card2);border:1px solid var(--line);border-radius:14px;padding:10px 2px;text-align:center;color:var(--txt);font:inherit;cursor:pointer}
 .tile b{display:block;font-size:20px;line-height:1.2}
@@ -738,6 +835,13 @@ details summary{cursor:pointer}
 @keyframes ind{0%{margin-inline-start:-30%}100%{margin-inline-start:100%}}
 
 .chk.locked{opacity:.6;cursor:not-allowed}.chk.locked span{text-decoration:line-through;text-decoration-color:#ff4d6d;text-decoration-thickness:2px;color:var(--critical)}.vip{font-style:normal;margin-inline-start:auto;font-size:12px;color:#ff8fa3;border:1px solid #ff4d6d;border-radius:999px;padding:2px 8px;white-space:nowrap}
+.energy{position:relative;width:170px;height:170px;margin:8px auto 10px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle,rgba(56,189,248,.12),transparent 70%);box-shadow:0 0 26px rgba(56,189,248,.45),inset 0 0 26px rgba(56,189,248,.35);}
+.energy::after{content:"";position:absolute;inset:-10px;border-radius:50%;border:3px solid transparent;border-top-color:#38bdf8;border-right-color:rgba(56,189,248,.35);box-shadow:0 0 18px rgba(56,189,248,.6);animation:spin 1.2s linear infinite}
+.shield{width:50px;height:50px;fill:rgba(56,189,248,.18);stroke:#38bdf8;stroke-width:1.6;filter:drop-shadow(0 0 6px #38bdf8);animation:shieldblink 1.4s ease-in-out infinite}
+.ring-pct{text-align:center;font-size:22px;font-weight:700;color:#38bdf8;margin:-2px 0 10px;font-variant-numeric:tabular-nums}
+.sysgrid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:12px}.sbar .sl{display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px}.sbar .sl b{color:#38bdf8;font-variant-numeric:tabular-nums}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes shieldblink{0%,100%{opacity:1}50%{opacity:.15}}
 </style>
 </head>
 <body>
@@ -761,7 +865,7 @@ let lang=LS.get('zs_lang','ar'),theme=LS.get('zs_theme','dark');
 if(lang!=='ar'&&lang!=='en')lang='ar';if(theme!=='dark'&&theme!=='light')theme='dark';
 
 const I={
-ar:{vip_only:'هذه الميزة لأعضاء VIP فقط',need_lic:'يحتاج ترخيص',dev:'خيارات المطور',t_dev:'خيارات المطور',dev_dev:'معرّف الجهاز',dev_days:'مدة الصلاحية (أيام)',dev_forever:'بدون انتهاء',dev_feat:'الميزات المفعّلة',dev_f_deep:'فحص عميق وشامل',dev_gen:'توليد المفتاح',dev_key:'مفتاح التفعيل',dev_copy:'نسخ المفتاح',dev_fail:'فشل التوليد',dev_hint:'معرّف الجهاز بيظهر للمستخدم بشاشة التفعيل.',select:'تحديد',cancel:'إلغاء',all:'الكل',delete:'حذف',deleted:'تم الحذف',no_match:'لا توجد نتائج',selected:'محدّد',delete_sel:'حذف المحدد',delete_all:'حذف الكل',confirm_sel:'سيتم حذف الفحوصات المحددة نهائياً من الهاتف. هل أنت متأكد؟',confirm_all:'سيتم حذف جميع الفحوصات نهائياً من الهاتف. هل أنت متأكد؟',sure:'تأكيد الحذف',nav_scan:'فحص',nav_hist:'السجل',nav_set:'الإعدادات',reload:'تحديث',t_scan:'فحص جديد',t_hist:'السجل',t_set:'الإعدادات',t_det:'تفاصيل الفحص',
+ar:{vip_only:'هذه الميزة لأعضاء VIP فقط',gpu_na:'قراءة GPU غير متاحة على هذا الجهاز',need_lic:'يحتاج ترخيص',dev:'خيارات المطور',t_dev:'خيارات المطور',dev_dev:'معرّف الجهاز',dev_days:'مدة الصلاحية (أيام)',dev_forever:'بدون انتهاء',dev_feat:'الميزات المفعّلة',dev_f_deep:'فحص عميق وشامل',dev_gen:'توليد المفتاح',dev_key:'مفتاح التفعيل',dev_copy:'نسخ المفتاح',dev_fail:'فشل التوليد',dev_hint:'معرّف الجهاز بيظهر للمستخدم بشاشة التفعيل.',select:'تحديد',cancel:'إلغاء',all:'الكل',delete:'حذف',deleted:'تم الحذف',no_match:'لا توجد نتائج',selected:'محدّد',delete_sel:'حذف المحدد',delete_all:'حذف الكل',confirm_sel:'سيتم حذف الفحوصات المحددة نهائياً من الهاتف. هل أنت متأكد؟',confirm_all:'سيتم حذف جميع الفحوصات نهائياً من الهاتف. هل أنت متأكد؟',sure:'تأكيد الحذف',nav_scan:'فحص',nav_hist:'السجل',nav_set:'الإعدادات',reload:'تحديث',t_scan:'فحص جديد',t_hist:'السجل',t_set:'الإعدادات',t_det:'تفاصيل الفحص',
  target:'رابط الهدف',mods:'الوحدات',m_all:'الكل',m_infra:'البنية التحتية',m_origin:'المصدر',m_files:'الملفات الحساسة',m_dirs:'المجلدات',m_params:'المعاملات',m_tech:'التقنيات',m_vuln:'فحص الويب',
  auth:'أؤكد أنني أملك هذا الموقع أو لدي إذن كتابي بفحصه. الفحص دون إذن ممنوع قانونياً.',start:'ابدأ الفحص',stop:'إيقاف',
  bar_run:'الفحص جارٍ',bar_done:'اكتمل الفحص، اضغط لعرض النتيجة',running:'جارٍ الفحص...',
@@ -773,7 +877,7 @@ ar:{vip_only:'هذه الميزة لأعضاء VIP فقط',need_lic:'يحتاج 
  lang:'اللغة',theme:'المظهر',dark:'داكن',light:'فاتح',info:'معلومات التطبيق',ver:'الإصدار',desc:'واجهة هاتف لفحص الأمان، تعمل مع أداة WebScout على تيرمكس.',
  store:'مكان حفظ السجلات',tool:'الأداة',tool_ok:'موجودة',tool_no:'غير موجودة',resp_h:'الاستخدام المسؤول',
  resp:'استخدم التطبيق على مواقع تملكها أو لديك إذن كتابي بفحصها فقط. المستخدم مسؤول عن استخدامه.',err:'تعذّر تحميل البيانات.',m:'د',s:'ث'},
-en:{vip_only:'This feature is for VIP users only',need_lic:'needs license',dev:'Developer options',t_dev:'Developer options',dev_dev:'Device ID',dev_days:'Validity (days)',dev_forever:'No expiry',dev_feat:'Enabled features',dev_f_deep:'Deep full scan',dev_gen:'Generate key',dev_key:'Activation key',dev_copy:'Copy key',dev_fail:'Generation failed',dev_hint:'The device ID is shown to the user on the activation screen.',select:'Select',cancel:'Cancel',all:'All',delete:'Delete',deleted:'Deleted',no_match:'No matches',selected:'Selected',delete_sel:'Delete selected',delete_all:'Delete all',confirm_sel:'The selected scans will be permanently deleted from your phone. Are you sure?',confirm_all:'All scans will be permanently deleted from your phone. Are you sure?',sure:'Confirm deletion',nav_scan:'Scan',nav_hist:'History',nav_set:'Settings',reload:'Refresh',t_scan:'New scan',t_hist:'History',t_set:'Settings',t_det:'Scan details',
+en:{vip_only:'This feature is for VIP users only',gpu_na:'GPU usage is not exposed on this device',need_lic:'needs license',dev:'Developer options',t_dev:'Developer options',dev_dev:'Device ID',dev_days:'Validity (days)',dev_forever:'No expiry',dev_feat:'Enabled features',dev_f_deep:'Deep full scan',dev_gen:'Generate key',dev_key:'Activation key',dev_copy:'Copy key',dev_fail:'Generation failed',dev_hint:'The device ID is shown to the user on the activation screen.',select:'Select',cancel:'Cancel',all:'All',delete:'Delete',deleted:'Deleted',no_match:'No matches',selected:'Selected',delete_sel:'Delete selected',delete_all:'Delete all',confirm_sel:'The selected scans will be permanently deleted from your phone. Are you sure?',confirm_all:'All scans will be permanently deleted from your phone. Are you sure?',sure:'Confirm deletion',nav_scan:'Scan',nav_hist:'History',nav_set:'Settings',reload:'Refresh',t_scan:'New scan',t_hist:'History',t_set:'Settings',t_det:'Scan details',
  target:'Target URL',mods:'Modules',m_all:'All',m_infra:'Infra',m_origin:'Origin',m_files:'Sensitive files',m_dirs:'Directories',m_params:'Parameters',m_tech:'Technology',m_vuln:'Web checks',
  auth:'I confirm I own this site or have written permission to test it. Testing without permission is illegal.',start:'Start scan',stop:'Stop',
  bar_run:'Scan started and running',bar_done:'Scan finished, tap to view the result',running:'Scanning...',
@@ -822,7 +926,7 @@ let cache=null,info={},gstate=null,tickBase=0,tickAt=0,sel=new Set(['all']),fsev
 
 function licFeatures(){try{const a=JSON.parse(window.Android&&Android.features?Android.features():'[]');return Array.isArray(a)?a:[]}catch(e){return []}}
 async function api(p){const r=await fetch(p);if(!r.ok)throw new Error(r.status);return r.json()}
-async function post(p,b){const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json','X-ZS':'1'},body:JSON.stringify(b||{})});
+async function post(p,b){const lk=(window.Android&&Android.licenseKey)?Android.licenseKey():'';const di=(window.Android&&Android.deviceId)?Android.deviceId():'';const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json','X-ZS':'1','X-ZS-Lic':lk||'','X-ZS-Dev':di||''},body:JSON.stringify(b||{})});
  const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||r.status);return j}
 const fdate=s=>{if(!s)return '';try{return new Date(s).toLocaleString(lang==='ar'?'ar':'en-GB',{dateStyle:'medium',timeStyle:'short'})}catch(e){return s}};
 const fdur=s=>s==null?'':(s>=60?Math.floor(s/60)+t('m')+' '+Math.round(s%60)+t('s'):Math.round(s)+t('s'));
@@ -856,7 +960,7 @@ function drawBar(){
  if(st&&st.running){
   b.className='';b.style.display='flex';b.href='#/';
   if(b.dataset.k!=='run'){b.dataset.k='run';
-   b.innerHTML=`<span class="spin"></span><span class="t">${esc(t('bar_run'))}: <span class="ltr" style="display:inline">${esc(st.target)}</span></span><span class="tm">${fdur(elapsed())}</span>`;}
+   b.innerHTML=`<span class="spin"></span><span class="t">${esc(t('bar_run'))}: <span class="ltr" style="display:inline">${esc(st.target)}</span></span>`;}
  }else if(Date.now()<doneUntil){
   b.className='done';b.style.display='flex';b.href='#/history';
   if(b.dataset.k!=='done'){b.dataset.k='done';
@@ -889,54 +993,44 @@ function check(){
  $('#go').disabled=!ok;
 }
 function waitVals(st){
- const p=st.progress||{};const el=elapsed();
+ const p=st.progress||{};
  const pct=p.pct!=null?p.pct:(p.total?Math.round(p.done/p.total*100):null);
- let eta=null;if(pct!=null&&pct>0&&pct<100)eta=el*(100-pct)/pct;
- return {el:el,pct:pct,att:p.req!=null?p.req:'—',etaTxt:eta==null?t('eta_calc'):'≈ '+fdur(eta)};
+ return {pct:pct};
 }
+const bar=(id,v)=>`<div class="sbar"><div class="sl"><span>${id}</span><b id="sv_${id}">${v==null?'—':v+'%'}</b></div><div class="bar"><i id="si_${id}" style="width:${v==null?0:v}%"></i></div></div>`;
 function waitHTML(st){
  const v=waitVals(st);
  return `<div class="wait">
-  <div class="ring ${v.pct==null?'spin':''}" id="wring"><svg viewBox="0 0 120 120"><circle class="rb" cx="60" cy="60" r="52"/><circle class="rf" id="wdash" cx="60" cy="60" r="52"/></svg><b id="wpct">${v.pct!=null?Math.round(v.pct)+'%':'...'}</b></div>
-  <div class="grid3">
-   <div class="stat2"><span>${t('elapsed')}</span><b id="wtm">${fdur(v.el)}</b></div>
-   <div class="stat2"><span>${t('attempts')}</span><b id="watt">${v.att}</b></div>
-   <div class="stat2"><span>${t('eta')}</span><b id="weta">${v.etaTxt}</b></div>
-  </div>
-  <div class="bar ${v.pct==null?'ind':''}" id="wbar"><i id="wbari" style="width:${v.pct!=null?v.pct:0}%"></i></div>
-  <div id="wlive"></div>
+  <div class="energy" id="wring"><svg class="shield" viewBox="0 0 24 24"><path d="M12 2 4 5v6c0 5 3.5 9 8 11 4.5-2 8-6 8-11V5z"/></svg></div>
+  <div class="ring-pct" id="wpct">${v.pct!=null?Math.round(v.pct)+'%':''}</div>
+  <div class="sysgrid">${bar('CPU',null)}${bar('GPU',null)}${bar('RAM',null)}</div>
+  <p class="mut" id="snote" style="text-align:center;margin:6px 0 0;font-size:12px"></p>
  </div>`;
 }
-function liveHTML(st){
- const L=st.live||{};const sv=L.sev||{};
- const chip=(k,c)=>`<span class="lchip ${c}">${k} <b>${sv[k]!=null?sv[k]:0}</b></span>`;
- const rows=(L.recent||[]).map(r=>`<div class="ltr">${esc(r)}</div>`).join('');
- const tasks=L.tasks!=null?`${L.tasks}/${L.total}`:'—';
- return `<div class="live"><div class="lrow">${chip('CRITICAL','c-critical')}${chip('HIGH','c-high')}${chip('MEDIUM','c-medium')}${chip('LOW','c-low')}${chip('INFO','c-info')}</div>
-  <div class="mut" style="margin:6px 0">${t('tasks')}: <b class="ltr">${tasks}</b> &middot; ${t('probes')}: <b class="ltr">${L.probes!=null?L.probes:'—'}</b></div>
-  <div class="lprobes ltr">${rows}</div></div>`;
+let statBusy=false,statLast=0;
+async function pollStats(){
+ if(statBusy||Date.now()-statLast<900)return;statBusy=true;statLast=Date.now();
+ try{
+  const s=await api('/api/stats');
+  const put=(k,v)=>{const b=$('#sv_'+k),i=$('#si_'+k);if(b)b.textContent=v==null?'—':v+'%';if(i)i.style.width=(v==null?0:Math.min(100,v))+'%'};
+  put('CPU',s.cpu);put('RAM',s.ram);put('GPU',s.gpu);
+  const n=$('#snote');if(n)n.textContent=(s.gpu==null?t('gpu_na'):'')+(s.cores?' · '+s.cores+' cores':'');
+ }catch(e){}
+ finally{statBusy=false}
 }
-function updateLive(st){
- const box=$('#wlive');if(!box)return;
- const h=liveHTML(st);if(box.dataset.h!==h){box.innerHTML=h;box.dataset.h=h}
-}
+function liveHTML(st){return ''}
+function updateLive(st){}
 function updateWait(st){
  const v=waitVals(st);
- const r=$('#wring');if(r)r.className='ring'+(v.pct==null?' spin':'');
- const d=$('#wdash');if(d)d.style.strokeDasharray=v.pct!=null?(326*v.pct/100).toFixed(1)+' 326':'80 246';
- const set=(id,txt)=>{const e=$(id);if(e&&e.textContent!==txt)e.textContent=txt};
- set('#wpct',v.pct!=null?Math.round(v.pct)+'%':'...');
- set('#watt',String(v.att));
- set('#weta',v.etaTxt);
- const bb=$('#wbar');if(bb)bb.className='bar'+(v.pct==null?' ind':'');
- const bi=$('#wbari');if(bi)bi.style.width=(v.pct!=null?v.pct:0)+'%';
+ const e=$('#wpct');if(e){const tx=v.pct!=null?Math.round(v.pct)+'%':'';if(e.textContent!==tx)e.textContent=tx}
+  pollStats();
 }
 function renderRun(){
  const box=$('#runbox');if(!box)return;check();
  const st=gstate;if(!st||!st.started){box.style.display='none';return}
  box.style.display='block';
  let head;
- if(st.running)head=`<span class="spin big"></span><b class="c-medium">${t('running')}</b><span class="mut" id="rtm">${fdur(elapsed())}</span>`;
+ if(st.running)head=`<span class="spin big"></span><b class="c-medium">${t('running')}</b>`;
  else{
   const k=st.code===0?'s_done':STOPPED.includes(st.code)?'s_stop':st.code===2?'s_cfg':st.code===3?'s_auth':'s_err';
   head=`<b class="${st.code===0?'c-ok':'c-high'}">${st.code===0?'&#10004; ':''}${t(k)}</b>`;
@@ -950,12 +1044,12 @@ function renderRun(){
  $('#stop').style.display=st.running?'inline-block':'none';
  $('#rtg').textContent=st.running?'':st.target;
  $('#rsave').textContent=(!st.running&&st.log_name)?`${t('saved')}: ${st.log_name}`:'';
- const lg=$('#rlog');const atEnd=lg.scrollTop+lg.clientHeight>=lg.scrollHeight-20;
- lg.textContent=st.log.join('\n');if(atEnd)lg.scrollTop=lg.scrollHeight;
+ const lg=$('#rlog');if(lg){const atEnd=lg.scrollTop+lg.clientHeight>=lg.scrollHeight-20;lg.textContent=st.log.join('\n');if(atEnd)lg.scrollTop=lg.scrollHeight}
  $('#rlink').innerHTML=(!st.running&&st.log_name)?`<a class="btn" href="#/last">${t('view')}</a>`:'';
 }
 async function scanView(){
  setNav('scan');
+ try{info=await api('/api/info')}catch(e){}
  const canDeep=licFeatures().includes('deep');
  show(`<div class="card">
   <label class="lbl" for="tg">${t('target')}</label>
@@ -967,7 +1061,7 @@ async function scanView(){
   <p id="err" style="color:var(--critical);margin:10px 0 0"></p></div>
   <div class="card" id="runbox" style="display:none">
    <div class="row sp"><div class="row" id="rhead"></div><button class="btn ghost" id="stop" style="display:none;padding:8px 14px">${t('stop')}</button></div>
-   <div class="mut ltr" id="rtg" style="margin:6px 0 10px"></div><div id="rwait"></div><details style="margin-top:10px"><summary class="mut">${t('log')}</summary><pre id="rlog"></pre></details>
+   <div class="mut ltr" id="rtg" style="margin:6px 0 10px"></div><div id="rwait"></div>${info.dev?'<details style="margin-top:10px"><summary class="mut">'+t('log')+'</summary><pre id="rlog"></pre></details>':''}
    <p class="mut" id="rsave" style="margin:10px 0 0"></p><p id="rlink" style="margin:10px 0 0"></p></div>`,t('t_scan'));
  drawMods();
  $('#mods').onclick=e=>{const k=e.target.dataset&&e.target.dataset.k;if(!k)return;
@@ -1108,10 +1202,9 @@ async function scanView2(id){
  const l=await scans();const meta=l.find(x=>x.id===id)||{};
  show(`<div class="card"><b class="ltr">${esc(s.target)}</b>
   <div class="mut" style="margin:4px 0">${meta.log?'log '+meta.log+' &middot; ':''}${fdate(s.started_at)} &middot; ${fdur(s.duration_seconds)}</div>
-  <div class="tiles">${SEV.map(k=>`<button class="tile c-${k}" data-k="${k}"><b>${sev[k]||0}</b><span>${sevName(k)}</span></button>`).join('')}</div>
   ${s.interrupted?`<p class="c-medium" style="margin:8px 0 0">${t('interrupted')}</p>`:''}
   ${meta.has_html?`<p style="margin:12px 0 0"><a class="btn" href="/report/${esc(id)}.html">${t('orig')}</a></p>`:''}</div>
-  <h2>${t('findings')} (${fl.length})</h2><div id="fl"></div>
+  <h2>${t('findings')}</h2><div id="fl"></div>
   <h2>${t('modules_h')}</h2>${mods||'<div class="mut">-</div>'}
   ${sk?`<h2>${t('skipped_h')}</h2>${sk}`:''}
   <h2>${t('raw_h')}</h2><details class="card"><summary>${t('raw_show')}</summary><pre style="margin-top:10px">${esc(JSON.stringify(d,null,2).slice(0,60000))}</pre></details>`,t('t_det'),true);
